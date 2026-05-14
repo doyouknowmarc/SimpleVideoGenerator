@@ -4,6 +4,7 @@ import type { DragEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useTimeline } from "@/state/timelineStore";
 import { TimelineRuler } from "./TimelineRuler";
 import { TimelineClip } from "./TimelineClip";
+import { EditableTimecode } from "./EditableTimecode";
 import { computeTotalDuration, snapToGrid } from "@/lib/timelineHelpers";
 import type { TrackType } from "@/types";
 import {
@@ -11,9 +12,12 @@ import {
   IconSkipBack, IconSkipForward, IconDuplicate, IconTrash,
 } from "./icons";
 
+export const TIMELINE_LEFT_PAD = 12; // px of breathing room at start of timeline
+
 type MoveDrag = {
   kind: "move";
   track: TrackType;
+  trackIndex: number;
   clipId: string;
   pointerStartX: number;
   clipStartTimeAtPointerDown: number;
@@ -21,6 +25,7 @@ type MoveDrag = {
 type ResizeRightDrag = {
   kind: "resize-right";
   track: TrackType;
+  trackIndex: number;
   clipId: string;
   pointerStartX: number;
   originalDuration: number;
@@ -28,6 +33,7 @@ type ResizeRightDrag = {
 type ResizeLeftDrag = {
   kind: "resize-left";
   track: TrackType;
+  trackIndex: number;
   clipId: string;
   pointerStartX: number;
   originalStart: number;
@@ -36,22 +42,12 @@ type ResizeLeftDrag = {
 type PlayheadDrag = { kind: "playhead"; pointerStartX: number };
 type DragState = MoveDrag | ResizeRightDrag | ResizeLeftDrag | PlayheadDrag | null;
 
-function fmtTimecode(t: number) {
-  if (!isFinite(t) || t < 0) t = 0;
-  const totalSec = Math.floor(t);
-  const ms = t - totalSec;
-  const h = Math.floor(totalSec / 3600);
-  const m = Math.floor((totalSec % 3600) / 60);
-  const s = totalSec % 60;
-  const frames = Math.floor(ms * 30);
-  const pad = (n: number, l = 2) => String(n).padStart(l, "0");
-  return `${pad(h)}:${pad(m)}:${pad(s)}.${pad(frames)}`;
-}
-
 export function TimelineEditor() {
   const imageClips = useTimeline((s) => s.imageClips);
   const audioClips = useTimeline((s) => s.audioClips);
   const assets = useTimeline((s) => s.assets);
+  const imageTrackCount = useTimeline((s) => s.imageTrackCount);
+  const audioTrackCount = useTimeline((s) => s.audioTrackCount);
   const playheadTime = useTimeline((s) => s.playheadTime);
   const playing = useTimeline((s) => s.playing);
   const togglePlay = useTimeline((s) => s.togglePlay);
@@ -68,6 +64,8 @@ export function TimelineEditor() {
   const removeAudioClip = useTimeline((s) => s.removeAudioClip);
   const addImageClip = useTimeline((s) => s.addImageClip);
   const addAudioClip = useTimeline((s) => s.addAudioClip);
+  const addImageTrack = useTimeline((s) => s.addImageTrack);
+  const addAudioTrack = useTimeline((s) => s.addAudioTrack);
   const setPlayhead = useTimeline((s) => s.setPlayhead);
   const selectClip = useTimeline((s) => s.selectClip);
   const setZoom = useTimeline((s) => s.setZoom);
@@ -77,13 +75,13 @@ export function TimelineEditor() {
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const [dragState, setDragState] = useState<DragState>(null);
-  const [imgDragOver, setImgDragOver] = useState(false);
-  const [audDragOver, setAudDragOver] = useState(false);
+  const [dragOverTrack, setDragOverTrack] = useState<string | null>(null);
 
   const total = computeTotalDuration(imageClips, audioClips);
   const minSeconds = Math.max(total + 5, 30);
   const containerWidth = scrollRef.current?.clientWidth ?? 800;
-  const trackWidth = Math.max(minSeconds * pps, containerWidth);
+  const trackContentWidth = Math.max(minSeconds * pps, containerWidth - TIMELINE_LEFT_PAD);
+  const trackWidth = TIMELINE_LEFT_PAD + trackContentWidth;
 
   function neighborEdges(track: TrackType, excludeId: string): number[] {
     const arr = track === "image" ? imageClips : audioClips;
@@ -125,8 +123,8 @@ export function TimelineEditor() {
       const deltaSec = (pointerX - pointerStartX) / pps;
 
       if (dragState.kind === "playhead") {
-        const t = snapEnabled ? snapToGrid(pointerX / pps) : Math.max(0, pointerX / pps);
-        setPlayhead(t);
+        const t = (pointerX - TIMELINE_LEFT_PAD) / pps;
+        setPlayhead(snapEnabled ? snapToGrid(t) : Math.max(0, t));
         return;
       }
       if (dragState.kind === "move") {
@@ -178,7 +176,6 @@ export function TimelineEditor() {
     };
   }, [dragState, pps, snapEnabled, imageClips, audioClips, setPlayhead, updateImageClip, updateAudioClip, scheduleSave]);
 
-  // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -206,23 +203,23 @@ export function TimelineEditor() {
     return e.clientX - rect.left + scrollEl.scrollLeft;
   }
 
-  function startMove(track: TrackType, clipId: string, clipStart: number, e: ReactMouseEvent) {
+  function startMove(track: TrackType, trackIndex: number, clipId: string, clipStart: number, e: ReactMouseEvent) {
     setDragState({
-      kind: "move", track, clipId,
+      kind: "move", track, trackIndex, clipId,
       pointerStartX: pointerXInScroll(e),
       clipStartTimeAtPointerDown: clipStart,
     });
   }
-  function startResizeRight(track: TrackType, clipId: string, origDur: number, e: ReactMouseEvent) {
+  function startResizeRight(track: TrackType, trackIndex: number, clipId: string, origDur: number, e: ReactMouseEvent) {
     setDragState({
-      kind: "resize-right", track, clipId,
+      kind: "resize-right", track, trackIndex, clipId,
       pointerStartX: pointerXInScroll(e),
       originalDuration: origDur,
     });
   }
-  function startResizeLeft(track: TrackType, clipId: string, origStart: number, origDur: number, e: ReactMouseEvent) {
+  function startResizeLeft(track: TrackType, trackIndex: number, clipId: string, origStart: number, origDur: number, e: ReactMouseEvent) {
     setDragState({
-      kind: "resize-left", track, clipId,
+      kind: "resize-left", track, trackIndex, clipId,
       pointerStartX: pointerXInScroll(e),
       originalStart: origStart,
       originalDuration: origDur,
@@ -230,68 +227,56 @@ export function TimelineEditor() {
   }
   function onRulerMouseDown(e: ReactMouseEvent<HTMLDivElement>) {
     const pointerX = pointerXInScroll(e);
-    setPlayhead(snapEnabled ? snapToGrid(pointerX / pps) : Math.max(0, pointerX / pps));
+    const t = (pointerX - TIMELINE_LEFT_PAD) / pps;
+    setPlayhead(snapEnabled ? snapToGrid(t) : Math.max(0, t));
     setDragState({ kind: "playhead", pointerStartX: pointerX });
   }
   function onPlayheadMouseDown(e: ReactMouseEvent<HTMLDivElement>) {
     e.stopPropagation();
     setDragState({ kind: "playhead", pointerStartX: pointerXInScroll(e) });
   }
-  function onTrackDrop(e: DragEvent<HTMLDivElement>, track: TrackType) {
+  function onTrackDrop(e: DragEvent<HTMLDivElement>, track: TrackType, trackIndex: number) {
     e.preventDefault();
-    setImgDragOver(false);
-    setAudDragOver(false);
+    setDragOverTrack(null);
     const assetId = e.dataTransfer.getData("application/x-asset-id");
     const assetType = e.dataTransfer.getData("application/x-asset-type") as TrackType;
     if (!assetId || assetType !== track) return;
     const pointerX = pointerXInScroll(e as unknown as ReactMouseEvent);
-    const t = snapToGrid(pointerX / pps);
+    const t = Math.max(0, snapToGrid((pointerX - TIMELINE_LEFT_PAD) / pps));
     if (track === "image") {
-      addImageClip(assetId, t);
+      addImageClip(assetId, t, trackIndex);
     } else {
       const asset = assets.find((a) => a.id === assetId);
-      addAudioClip(assetId, t, asset?.duration ?? 5);
+      addAudioClip(assetId, t, asset?.duration ?? 5, trackIndex);
     }
   }
   function onTrackBackgroundMouseDown(e: ReactMouseEvent<HTMLDivElement>) {
     if (e.target === e.currentTarget) selectClip(null, null);
   }
-  function jumpStart() { setPlaying(false); setPlayhead(0); }
-  function jumpEnd() { setPlaying(false); setPlayhead(total); }
+
+  // Skip to previous/next clip boundary (image clip starts).
+  function jumpPrev() {
+    setPlaying(false);
+    const starts = imageClips.map((c) => c.startTime).filter((t) => t < playheadTime - 0.05).sort((a, b) => b - a);
+    setPlayhead(starts[0] ?? 0);
+  }
+  function jumpNext() {
+    setPlaying(false);
+    const starts = imageClips.map((c) => c.startTime).filter((t) => t > playheadTime + 0.05).sort((a, b) => a - b);
+    setPlayhead(starts[0] ?? total);
+  }
 
   const hasSelection = !!selectedClipId;
   const selectedImageClip = selectedTrack === "image"
     ? imageClips.find((c) => c.id === selectedClipId)
     : null;
 
+  const dragHoverKey = (track: TrackType, idx: number) => `${track}-${idx}`;
+
   return (
     <div className="timeline-editor">
       <div className="timeline-toolbar">
-        {/* Transport */}
-        <div className="toolbar-group">
-          <button className="toolbar-btn" onClick={jumpStart} disabled={total <= 0} title="Jump to start">
-            <IconSkipBack size={14} />
-          </button>
-          <button
-            className={`toolbar-btn play ${playing ? "playing" : ""}`}
-            onClick={togglePlay}
-            disabled={total <= 0}
-            title={playing ? "Pause (Space)" : "Play (Space)"}
-          >
-            {playing ? <IconPause size={14} /> : <IconPlay size={14} />}
-          </button>
-          <button className="toolbar-btn" onClick={jumpEnd} disabled={total <= 0} title="Jump to end">
-            <IconSkipForward size={14} />
-          </button>
-          <span className="timecode toolbar-timecode">
-            {fmtTimecode(playheadTime)} / {fmtTimecode(total)}
-          </span>
-        </div>
-
-        <div className="toolbar-separator" />
-
-        {/* Selection actions */}
-        <div className="toolbar-group">
+        <div className="toolbar-left">
           <button
             className="toolbar-btn"
             onClick={duplicateSelected}
@@ -308,11 +293,7 @@ export function TimelineEditor() {
           >
             <IconTrash size={14} />
           </button>
-        </div>
-
-        {selectedImageClip && (
-          <>
-            <div className="toolbar-separator" />
+          {selectedImageClip && (
             <div className="selection-info">
               <label>Fit:</label>
               <select
@@ -326,115 +307,192 @@ export function TimelineEditor() {
                 <option value="cover">Cover</option>
               </select>
             </div>
-          </>
-        )}
+          )}
+        </div>
 
-        <div className="toolbar-spacer" />
-
-        {/* Zoom */}
-        <div className="zoom-control">
-          <IconZoom />
-          <input
-            type="range"
-            min={2}
-            max={400}
-            step={1}
-            value={pps}
-            onChange={(e) => setZoom(Number(e.target.value))}
-            title={`Zoom: ${pps} px/s`}
+        <div className="toolbar-center">
+          <button
+            className="toolbar-btn"
+            onClick={jumpPrev}
+            disabled={total <= 0}
+            title="Previous clip"
+          >
+            <IconSkipBack size={14} />
+          </button>
+          <button
+            className={`toolbar-btn play ${playing ? "playing" : ""}`}
+            onClick={togglePlay}
+            disabled={total <= 0}
+            title={playing ? "Pause (Space)" : "Play (Space)"}
+          >
+            {playing ? <IconPause size={14} /> : <IconPlay size={14} />}
+          </button>
+          <button
+            className="toolbar-btn"
+            onClick={jumpNext}
+            disabled={total <= 0}
+            title="Next clip"
+          >
+            <IconSkipForward size={14} />
+          </button>
+          <EditableTimecode
+            current={playheadTime}
+            total={total}
+            onSeek={(t) => { setPlaying(false); setPlayhead(t); }}
           />
         </div>
 
-        <div className="toolbar-separator" />
-
-        {/* Snap toggle */}
-        <button
-          type="button"
-          className={`snap-toggle ${snapEnabled ? "on" : ""}`}
-          onClick={toggleSnap}
-          title="Toggle snapping"
-        >
-          Snap <span className="switch" />
-        </button>
+        <div className="toolbar-right">
+          <div className="zoom-control">
+            <IconZoom />
+            <input
+              type="range"
+              min={2}
+              max={400}
+              step={1}
+              value={pps}
+              onChange={(e) => setZoom(Number(e.target.value))}
+              title={`Zoom: ${pps} px/s`}
+            />
+          </div>
+          <button
+            type="button"
+            className={`snap-toggle ${snapEnabled ? "on" : ""}`}
+            onClick={toggleSnap}
+            title="Toggle snapping"
+          >
+            Snap <span className="switch" />
+          </button>
+        </div>
       </div>
 
       <div className="timeline-body">
         <div className="timeline-labels">
           <div className="timeline-label-ruler" />
-          <div className="timeline-label-cell" title="Image track"><IconFilm size={16} /></div>
-          <div className="timeline-label-cell" title="Audio track"><IconVolume size={16} /></div>
+          {Array.from({ length: imageTrackCount }).map((_, idx) => (
+            <div className="timeline-label-cell" key={`img-${idx}`} title={`Image track ${idx + 1}`}>
+              <IconFilm size={16} />
+            </div>
+          ))}
+          <button
+            className="add-track-btn"
+            onClick={addImageTrack}
+            title="Add image track"
+          >
+            <span className="plus">+</span>
+          </button>
+          {Array.from({ length: audioTrackCount }).map((_, idx) => (
+            <div className="timeline-label-cell" key={`aud-${idx}`} title={`Audio track ${idx + 1}`}>
+              <IconVolume size={16} />
+            </div>
+          ))}
+          <button
+            className="add-track-btn"
+            onClick={addAudioTrack}
+            title="Add audio track"
+          >
+            <span className="plus">+</span>
+          </button>
         </div>
         <div className="timeline-scroll" ref={scrollRef}>
           <div className="timeline-tracks" style={{ width: trackWidth }}>
             <div onMouseDown={onRulerMouseDown}>
-              <TimelineRuler totalSeconds={minSeconds} pixelsPerSecond={pps} width={trackWidth} />
+              <TimelineRuler
+                totalSeconds={minSeconds}
+                pixelsPerSecond={pps}
+                width={trackWidth}
+                leftPad={TIMELINE_LEFT_PAD}
+              />
             </div>
-            <div
-              className={`timeline-track image ${imgDragOver ? "drag-over" : ""}`}
-              onMouseDown={onTrackBackgroundMouseDown}
-              onDragOver={(e) => {
-                e.preventDefault();
-                e.dataTransfer.dropEffect = "copy";
-                if (e.dataTransfer.types.includes("application/x-asset-type")) setImgDragOver(true);
-              }}
-              onDragLeave={() => setImgDragOver(false)}
-              onDrop={(e) => onTrackDrop(e, "image")}
-            >
-              {imageClips.map((c) => {
-                const asset = assets.find((a) => a.id === c.assetId);
-                return (
-                  <TimelineClip
-                    key={c.id}
-                    id={c.id}
-                    startTime={c.startTime}
-                    duration={c.duration}
-                    pixelsPerSecond={pps}
-                    trackType="image"
-                    label={asset?.filename ?? "(missing)"}
-                    thumbUrl={asset?.url}
-                    isSelected={selectedClipId === c.id && selectedTrack === "image"}
-                    onBodyMouseDown={(e) => startMove("image", c.id, c.startTime, e)}
-                    onLeftHandleMouseDown={(e) => startResizeLeft("image", c.id, c.startTime, c.duration, e)}
-                    onRightHandleMouseDown={(e) => startResizeRight("image", c.id, c.duration, e)}
-                    onSelect={() => selectClip(c.id, "image")}
-                    onDelete={() => removeImageClip(c.id)}
-                  />
-                );
-              })}
-            </div>
-            <div
-              className={`timeline-track audio ${audDragOver ? "drag-over" : ""}`}
-              onMouseDown={onTrackBackgroundMouseDown}
-              onDragOver={(e) => {
-                e.preventDefault();
-                e.dataTransfer.dropEffect = "copy";
-                if (e.dataTransfer.types.includes("application/x-asset-type")) setAudDragOver(true);
-              }}
-              onDragLeave={() => setAudDragOver(false)}
-              onDrop={(e) => onTrackDrop(e, "audio")}
-            >
-              {audioClips.map((c) => {
-                const asset = assets.find((a) => a.id === c.assetId);
-                return (
-                  <TimelineClip
-                    key={c.id}
-                    id={c.id}
-                    startTime={c.startTime}
-                    duration={c.duration}
-                    pixelsPerSecond={pps}
-                    trackType="audio"
-                    label={asset?.filename ?? "(missing)"}
-                    isSelected={selectedClipId === c.id && selectedTrack === "audio"}
-                    onBodyMouseDown={(e) => startMove("audio", c.id, c.startTime, e)}
-                    onLeftHandleMouseDown={(e) => startResizeLeft("audio", c.id, c.startTime, c.duration, e)}
-                    onRightHandleMouseDown={(e) => startResizeRight("audio", c.id, c.duration, e)}
-                    onSelect={() => selectClip(c.id, "audio")}
-                    onDelete={() => removeAudioClip(c.id)}
-                  />
-                );
-              })}
-            </div>
-            <div className="playhead" style={{ left: playheadTime * pps }}>
+
+            {Array.from({ length: imageTrackCount }).map((_, idx) => {
+              const key = dragHoverKey("image", idx);
+              return (
+                <div
+                  key={`img-${idx}`}
+                  className={`timeline-track image ${dragOverTrack === key ? "drag-over" : ""}`}
+                  onMouseDown={onTrackBackgroundMouseDown}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "copy";
+                    if (e.dataTransfer.types.includes("application/x-asset-type")) setDragOverTrack(key);
+                  }}
+                  onDragLeave={() => setDragOverTrack((cur) => (cur === key ? null : cur))}
+                  onDrop={(e) => onTrackDrop(e, "image", idx)}
+                >
+                  {imageClips
+                    .filter((c) => c.trackIndex === idx)
+                    .map((c) => {
+                      const asset = assets.find((a) => a.id === c.assetId);
+                      return (
+                        <TimelineClip
+                          key={c.id}
+                          id={c.id}
+                          startTime={c.startTime}
+                          duration={c.duration}
+                          pixelsPerSecond={pps}
+                          leftPad={TIMELINE_LEFT_PAD}
+                          trackType="image"
+                          label={asset?.filename ?? "(missing)"}
+                          thumbUrl={asset?.url}
+                          isSelected={selectedClipId === c.id && selectedTrack === "image"}
+                          onBodyMouseDown={(e) => startMove("image", idx, c.id, c.startTime, e)}
+                          onLeftHandleMouseDown={(e) => startResizeLeft("image", idx, c.id, c.startTime, c.duration, e)}
+                          onRightHandleMouseDown={(e) => startResizeRight("image", idx, c.id, c.duration, e)}
+                          onSelect={() => selectClip(c.id, "image")}
+                          onDelete={() => removeImageClip(c.id)}
+                        />
+                      );
+                    })}
+                </div>
+              );
+            })}
+            <div className="add-track-row" />
+
+            {Array.from({ length: audioTrackCount }).map((_, idx) => {
+              const key = dragHoverKey("audio", idx);
+              return (
+                <div
+                  key={`aud-${idx}`}
+                  className={`timeline-track audio ${dragOverTrack === key ? "drag-over" : ""}`}
+                  onMouseDown={onTrackBackgroundMouseDown}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "copy";
+                    if (e.dataTransfer.types.includes("application/x-asset-type")) setDragOverTrack(key);
+                  }}
+                  onDragLeave={() => setDragOverTrack((cur) => (cur === key ? null : cur))}
+                  onDrop={(e) => onTrackDrop(e, "audio", idx)}
+                >
+                  {audioClips
+                    .filter((c) => c.trackIndex === idx)
+                    .map((c) => {
+                      const asset = assets.find((a) => a.id === c.assetId);
+                      return (
+                        <TimelineClip
+                          key={c.id}
+                          id={c.id}
+                          startTime={c.startTime}
+                          duration={c.duration}
+                          pixelsPerSecond={pps}
+                          leftPad={TIMELINE_LEFT_PAD}
+                          trackType="audio"
+                          label={asset?.filename ?? "(missing)"}
+                          isSelected={selectedClipId === c.id && selectedTrack === "audio"}
+                          onBodyMouseDown={(e) => startMove("audio", idx, c.id, c.startTime, e)}
+                          onLeftHandleMouseDown={(e) => startResizeLeft("audio", idx, c.id, c.startTime, c.duration, e)}
+                          onRightHandleMouseDown={(e) => startResizeRight("audio", idx, c.id, c.duration, e)}
+                          onSelect={() => selectClip(c.id, "audio")}
+                          onDelete={() => removeAudioClip(c.id)}
+                        />
+                      );
+                    })}
+                </div>
+              );
+            })}
+            <div className="add-track-row" />
+
+            <div className="playhead" style={{ left: TIMELINE_LEFT_PAD + playheadTime * pps }}>
               <div className="playhead-head" onMouseDown={onPlayheadMouseDown} />
             </div>
           </div>

@@ -15,7 +15,6 @@ const SIDEBAR_VISIBLE_KEY = "svg.sidebarVisible";
 
 export default function Page() {
   const loaded = useTimeline((s) => s.loaded);
-  const saving = useTimeline((s) => s.saving);
   const load = useTimeline((s) => s.load);
 
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -52,7 +51,6 @@ export default function Page() {
         </button>
       </div>
       <div className="preview-overlay-tr">
-        <span className="save-status">{saving ? "Saving…" : "Saved"}</span>
         <ExportButton />
       </div>
       <PreviewPlayer />

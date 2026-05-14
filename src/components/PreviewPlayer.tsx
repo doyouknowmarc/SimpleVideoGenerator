@@ -15,20 +15,20 @@ export function PreviewPlayer() {
   const rafRef = useRef<number | null>(null);
   const lastFrameRef = useRef<number>(0);
   const audioRefs = useRef<Record<string, HTMLAudioElement | null>>({});
-  const activeClipsRef = useRef<Set<string>>(new Set());
+  const prevPlayingRef = useRef<boolean>(playing);
 
   const total = computeTotalDuration(imageClips, audioClips);
 
-  const activeImageClip = [...imageClips]
-    .reverse()
-    .find((c) => playheadTime >= c.startTime && playheadTime < c.startTime + c.duration);
+  // Active image clip: among all clips covering playheadTime, take the highest trackIndex.
+  const activeImageClip = imageClips
+    .filter((c) => playheadTime >= c.startTime && playheadTime < c.startTime + c.duration)
+    .reduce<typeof imageClips[number] | null>(
+      (best, c) => (best == null || c.trackIndex > best.trackIndex ? c : best),
+      null,
+    );
   const activeImage = activeImageClip
     ? assets.find((a) => a.id === activeImageClip.assetId)
     : null;
-
-  const activeAudioClips = audioClips.filter(
-    (c) => playheadTime >= c.startTime && playheadTime < c.startTime + c.duration,
-  );
 
   // Playback loop, driven by store's `playing`
   useEffect(() => {
@@ -57,33 +57,75 @@ export function PreviewPlayer() {
     };
   }, [playing, total, setPlayhead, setPlaying]);
 
-  // Audio sync
+  // Explicit play/pause kickoff when `playing` toggles.
+  // Seeks each audio element to the correct offset, waits for readyState
+  // if needed, then starts playback. This fixes "playhead in middle of
+  // clip → audio doesn't play" because the prior gentle-sync was racing
+  // with seek completion.
   useEffect(() => {
-    const activeIds = new Set(activeAudioClips.map((c) => c.id));
-    for (const id of activeClipsRef.current) {
-      if (!activeIds.has(id)) {
+    const wasPlaying = prevPlayingRef.current;
+    prevPlayingRef.current = playing;
+
+    if (playing && !wasPlaying) {
+      const t = useTimeline.getState().playheadTime;
+      for (const clip of audioClips) {
+        const inside = t >= clip.startTime && t < clip.startTime + clip.duration;
+        if (!inside) continue;
+        const el = audioRefs.current[clip.id];
+        if (!el) continue;
+        const offset = Math.max(0, t - clip.startTime);
+        const start = () => {
+          try { el.currentTime = offset; } catch { /* ignore */ }
+          el.play().catch(() => { /* autoplay restrictions: silently ignore */ });
+        };
+        if (el.readyState >= 1) {
+          start();
+        } else {
+          const onLoaded = () => {
+            el.removeEventListener("loadedmetadata", onLoaded);
+            start();
+          };
+          el.addEventListener("loadedmetadata", onLoaded);
+          try { el.load(); } catch { /* ignore */ }
+        }
+      }
+    } else if (!playing && wasPlaying) {
+      // Pause everything when stopping
+      for (const id in audioRefs.current) {
         const el = audioRefs.current[id];
-        if (el) {
-          el.pause();
-          el.currentTime = 0;
+        if (el && !el.paused) el.pause();
+      }
+    }
+  }, [playing, audioClips]);
+
+  // Continuous sync while playing: bring elements in/out as clips
+  // enter/exit the active range, correct drift, and pause everything
+  // when not playing.
+  useEffect(() => {
+    for (const clip of audioClips) {
+      const el = audioRefs.current[clip.id];
+      if (!el) continue;
+      const inside = playheadTime >= clip.startTime && playheadTime < clip.startTime + clip.duration;
+      if (!inside) {
+        if (!el.paused) el.pause();
+        continue;
+      }
+      const offset = Math.max(0, playheadTime - clip.startTime);
+      if (playing) {
+        if (el.paused) {
+          try { el.currentTime = offset; } catch { /* ignore */ }
+          el.play().catch(() => {});
+        } else if (Math.abs(el.currentTime - offset) > 0.3) {
+          try { el.currentTime = offset; } catch { /* ignore */ }
+        }
+      } else {
+        if (!el.paused) el.pause();
+        if (Math.abs(el.currentTime - offset) > 0.3) {
+          try { el.currentTime = offset; } catch { /* ignore */ }
         }
       }
     }
-    for (const clip of activeAudioClips) {
-      const el = audioRefs.current[clip.id];
-      if (!el) continue;
-      const offset = Math.max(0, playheadTime - clip.startTime);
-      if (Math.abs(el.currentTime - offset) > 0.2) {
-        try { el.currentTime = offset; } catch { /* ignore */ }
-      }
-      if (playing) {
-        el.play().catch(() => {});
-      } else {
-        el.pause();
-      }
-    }
-    activeClipsRef.current = activeIds;
-  }, [activeAudioClips, playing, playheadTime]);
+  }, [audioClips, playheadTime, playing]);
 
   return (
     <>

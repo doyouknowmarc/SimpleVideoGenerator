@@ -17,6 +17,7 @@ export type FitMode = "cover" | "contain";
 export type ImageClip = {
   id: string;
   assetId: string;
+  trackIndex: number;
   startTime: number;
   duration: number;
   fitMode: FitMode;
@@ -25,6 +26,7 @@ export type ImageClip = {
 export type AudioClip = {
   id: string;
   assetId: string;
+  trackIndex: number;
   startTime: number;
   duration: number;
 };
@@ -45,6 +47,8 @@ export type RenderJob = {
 export type ProjectPayload = {
   id: string;
   title: string;
+  imageTrackCount: number;
+  audioTrackCount: number;
   assets: MediaAsset[];
   imageClips: ImageClip[];
   audioClips: AudioClip[];

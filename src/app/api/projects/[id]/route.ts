@@ -5,6 +5,7 @@ export const dynamic = "force-dynamic";
 
 type IncomingImageClip = {
   assetId: string;
+  trackIndex?: number;
   startTime: number;
   duration: number;
   fitMode: "cover" | "contain";
@@ -12,12 +13,15 @@ type IncomingImageClip = {
 
 type IncomingAudioClip = {
   assetId: string;
+  trackIndex?: number;
   startTime: number;
   duration: number;
 };
 
 type PatchBody = {
   title?: string;
+  imageTrackCount?: number;
+  audioTrackCount?: number;
   imageClips?: IncomingImageClip[];
   audioClips?: IncomingAudioClip[];
 };
@@ -32,8 +36,12 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
 
   await prisma.$transaction(async (tx) => {
-    if (body.title !== undefined) {
-      await tx.project.update({ where: { id: projectId }, data: { title: body.title } });
+    const projectUpdate: Record<string, unknown> = {};
+    if (body.title !== undefined) projectUpdate.title = body.title;
+    if (body.imageTrackCount !== undefined) projectUpdate.imageTrackCount = Math.max(1, body.imageTrackCount);
+    if (body.audioTrackCount !== undefined) projectUpdate.audioTrackCount = Math.max(1, body.audioTrackCount);
+    if (Object.keys(projectUpdate).length > 0) {
+      await tx.project.update({ where: { id: projectId }, data: projectUpdate });
     }
 
     if (body.imageClips !== undefined || body.audioClips !== undefined) {
@@ -46,6 +54,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         ...imageClips.map((c) => ({
           projectId,
           trackType: "image",
+          trackIndex: c.trackIndex ?? 0,
           assetId: c.assetId,
           startTime: c.startTime,
           duration: c.duration,
@@ -54,6 +63,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         ...audioClips.map((c) => ({
           projectId,
           trackType: "audio",
+          trackIndex: c.trackIndex ?? 0,
           assetId: c.assetId,
           startTime: c.startTime,
           duration: c.duration,

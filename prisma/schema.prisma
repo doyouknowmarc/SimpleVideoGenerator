@@ -8,13 +8,15 @@ datasource db {
 }
 
 model Project {
-  id        String   @id @default(cuid())
-  title     String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  assets    MediaAsset[]
-  clips     TimelineClip[]
-  jobs      RenderJob[]
+  id              String   @id @default(cuid())
+  title           String
+  imageTrackCount Int      @default(1)
+  audioTrackCount Int      @default(1)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  assets          MediaAsset[]
+  clips           TimelineClip[]
+  jobs            RenderJob[]
 }
 
 model MediaAsset {
@@ -34,14 +36,15 @@ model MediaAsset {
 }
 
 model TimelineClip {
-  id        String  @id @default(cuid())
-  projectId String
-  trackType String
-  assetId   String
-  startTime Float
-  duration  Float
-  fitMode   String?
-  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  id         String  @id @default(cuid())
+  projectId  String
+  trackType  String
+  trackIndex Int     @default(0)
+  assetId    String
+  startTime  Float
+  duration   Float
+  fitMode    String?
+  project    Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@index([projectId])
 }
@@ -49,6 +52,7 @@ model TimelineClip {
 model RenderJob {
   id           String    @id @default(cuid())
   projectId    String
+  filename     String?
   status       String
   progress     Float     @default(0)
   outputPath   String?

@@ -145,9 +145,7 @@ async function main() {
     const assets = await prisma.mediaAsset.findMany({ where: { projectId: job.projectId } });
     const assetMap = new Map(assets.map((a) => [a.id, a]));
 
-    const imageClips = clips
-      .filter((c) => c.trackType === "image")
-      .sort((a, b) => a.startTime - b.startTime);
+    const imageClips = clips.filter((c) => c.trackType === "image");
     const audioClips = clips.filter((c) => c.trackType === "audio");
 
     const allEnds = [...imageClips, ...audioClips].map((c) => c.startTime + c.duration);
@@ -157,38 +155,60 @@ async function main() {
     const jobDir = path.join(RENDERS_DIR, jobId);
     await mkdir(jobDir, { recursive: true });
 
-    // ---------- Stage 1: build video track (image clips + black gaps) ----------
-    const segments = []; // [{ type, duration, ... }]
-    let cursor = 0;
-    for (const clip of imageClips) {
-      if (clip.startTime > cursor + 0.001) {
-        segments.push({ type: "black", duration: clip.startTime - cursor });
-      } else if (clip.startTime < cursor - 0.001) {
-        // Overlapping image clip — we can't render two images at once,
-        // so just skip the overlap (later image wins for the overlapping region).
-        // Adjust duration of this clip to start at cursor.
-        const newDur = clip.startTime + clip.duration - cursor;
-        if (newDur > 0.001) {
-          segments.push({
-            type: "image",
-            duration: newDur,
-            imagePath: assetMap.get(clip.assetId).storagePath,
-            fitMode: clip.fitMode ?? "contain",
-          });
-          cursor = cursor + newDur;
-        }
-        continue;
-      }
-      segments.push({
-        type: "image",
-        duration: clip.duration,
-        imagePath: assetMap.get(clip.assetId).storagePath,
-        fitMode: clip.fitMode ?? "contain",
-      });
-      cursor = clip.startTime + clip.duration;
+    // ---------- Stage 1: build video track ----------
+    // Multi-track: at each instant the topmost trackIndex with an active
+    // clip wins. We sweep through all transition points (clip starts +
+    // ends) and emit a segment for each interval where the active clip
+    // stays constant.
+    const epsilon = 0.001;
+    const pointSet = new Set([0, totalDuration]);
+    for (const c of imageClips) {
+      pointSet.add(c.startTime);
+      pointSet.add(c.startTime + c.duration);
     }
-    if (cursor < totalDuration - 0.001) {
-      segments.push({ type: "black", duration: totalDuration - cursor });
+    const points = [...pointSet]
+      .filter((p) => p >= -epsilon && p <= totalDuration + epsilon)
+      .sort((a, b) => a - b);
+
+    const rawSegments = [];
+    for (let i = 0; i < points.length - 1; i++) {
+      const segStart = points[i];
+      const segEnd = points[i + 1];
+      const segDur = segEnd - segStart;
+      if (segDur < epsilon) continue;
+      const mid = (segStart + segEnd) / 2;
+      let active = null;
+      for (const c of imageClips) {
+        if (mid >= c.startTime - epsilon && mid < c.startTime + c.duration + epsilon) {
+          if (active == null || c.trackIndex > active.trackIndex) active = c;
+        }
+      }
+      if (active) {
+        rawSegments.push({
+          type: "image",
+          duration: segDur,
+          imagePath: assetMap.get(active.assetId).storagePath,
+          fitMode: active.fitMode ?? "contain",
+        });
+      } else {
+        rawSegments.push({ type: "black", duration: segDur });
+      }
+    }
+
+    // Merge adjacent segments with the same image (avoids re-encoding the
+    // same still across micro-intervals from overlapping start/end points)
+    const segments = [];
+    for (const s of rawSegments) {
+      const last = segments[segments.length - 1];
+      if (
+        last &&
+        ((last.type === "black" && s.type === "black") ||
+          (last.type === "image" && s.type === "image" && last.imagePath === s.imagePath && last.fitMode === s.fitMode))
+      ) {
+        last.duration += s.duration;
+      } else {
+        segments.push({ ...s });
+      }
     }
 
     const segmentFiles = [];

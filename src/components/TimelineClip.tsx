@@ -6,6 +6,7 @@ type Props = {
   startTime: number;
   duration: number;
   pixelsPerSecond: number;
+  leftPad?: number;
   trackType: "image" | "audio";
   label: string;
   thumbUrl?: string;
@@ -21,6 +22,7 @@ export function TimelineClip({
   startTime,
   duration,
   pixelsPerSecond,
+  leftPad = 0,
   trackType,
   label,
   thumbUrl,
@@ -31,7 +33,7 @@ export function TimelineClip({
   onSelect,
   onDelete,
 }: Props) {
-  const left = startTime * pixelsPerSecond;
+  const left = leftPad + startTime * pixelsPerSecond;
   const width = Math.max(8, duration * pixelsPerSecond);
 
   return (

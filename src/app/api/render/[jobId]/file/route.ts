@@ -13,6 +13,8 @@ export async function GET(_req: NextRequest, { params }: { params: { jobId: stri
   try { size = statSync(job.outputPath).size; }
   catch { return new Response("file missing", { status: 410 }); }
 
+  const downloadName = (job.filename ? `${job.filename}.mp4` : `video-${job.id}.mp4`).replace(/"/g, "");
+
   const nodeStream = createReadStream(job.outputPath);
   const webStream = Readable.toWeb(nodeStream) as unknown as ReadableStream;
 
@@ -20,7 +22,7 @@ export async function GET(_req: NextRequest, { params }: { params: { jobId: stri
     headers: {
       "Content-Type": "video/mp4",
       "Content-Length": String(size),
-      "Content-Disposition": `attachment; filename="video-${job.id}.mp4"`,
+      "Content-Disposition": `attachment; filename="${downloadName}"`,
     },
   });
 }

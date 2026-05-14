@@ -15,6 +15,8 @@ function nextId(prefix: string): string {
 type State = {
   projectId: string | null;
   title: string;
+  imageTrackCount: number;
+  audioTrackCount: number;
   assets: MediaAsset[];
   imageClips: ImageClip[];
   audioClips: AudioClip[];
@@ -36,13 +38,16 @@ type State = {
   addAsset: (a: MediaAsset) => void;
   removeAsset: (id: string) => void;
 
-  addImageClip: (assetId: string, startTime: number) => void;
+  addImageClip: (assetId: string, startTime: number, trackIndex?: number) => void;
   updateImageClip: (id: string, patch: Partial<ImageClip>) => void;
   removeImageClip: (id: string) => void;
 
-  addAudioClip: (assetId: string, startTime: number, duration: number) => void;
+  addAudioClip: (assetId: string, startTime: number, duration: number, trackIndex?: number) => void;
   updateAudioClip: (id: string, patch: Partial<AudioClip>) => void;
   removeAudioClip: (id: string) => void;
+
+  addImageTrack: () => void;
+  addAudioTrack: () => void;
 
   duplicateSelected: () => void;
   deleteSelected: () => void;
@@ -67,6 +72,8 @@ type State = {
 export const useTimeline = create<State>((set, get) => ({
   projectId: null,
   title: "",
+  imageTrackCount: 1,
+  audioTrackCount: 1,
   assets: [],
   imageClips: [],
   audioClips: [],
@@ -87,6 +94,8 @@ export const useTimeline = create<State>((set, get) => ({
     set({
       projectId: data.id,
       title: data.title,
+      imageTrackCount: data.imageTrackCount ?? 1,
+      audioTrackCount: data.audioTrackCount ?? 1,
       assets: data.assets,
       imageClips: data.imageClips,
       audioClips: data.audioClips,
@@ -105,10 +114,11 @@ export const useTimeline = create<State>((set, get) => ({
     get().scheduleSave();
   },
 
-  addImageClip: (assetId, startTime) => {
+  addImageClip: (assetId, startTime, trackIndex = 0) => {
     const newClip: ImageClip = {
       id: nextId("img"),
       assetId,
+      trackIndex,
       startTime: Math.max(0, startTime),
       duration: 5,
       fitMode: "contain" as FitMode,
@@ -136,10 +146,11 @@ export const useTimeline = create<State>((set, get) => ({
     get().scheduleSave();
   },
 
-  addAudioClip: (assetId, startTime, duration) => {
+  addAudioClip: (assetId, startTime, duration, trackIndex = 0) => {
     const newClip: AudioClip = {
       id: nextId("aud"),
       assetId,
+      trackIndex,
       startTime: Math.max(0, startTime),
       duration: Math.max(0.1, duration),
     };
@@ -148,6 +159,15 @@ export const useTimeline = create<State>((set, get) => ({
       selectedClipId: newClip.id,
       selectedTrack: "audio",
     }));
+    get().scheduleSave();
+  },
+
+  addImageTrack: () => {
+    set((s) => ({ imageTrackCount: s.imageTrackCount + 1 }));
+    get().scheduleSave();
+  },
+  addAudioTrack: () => {
+    set((s) => ({ audioTrackCount: s.audioTrackCount + 1 }));
     get().scheduleSave();
   },
 
@@ -230,6 +250,7 @@ export const useTimeline = create<State>((set, get) => ({
       imageClips.push({
         id: nextId("img"),
         assetId: p.imageAssetId,
+        trackIndex: 0,
         startTime: cursor,
         duration,
         fitMode: "contain",
@@ -238,6 +259,7 @@ export const useTimeline = create<State>((set, get) => ({
         audioClips.push({
           id: nextId("aud"),
           assetId: p.audioAssetId,
+          trackIndex: 0,
           startTime: cursor,
           duration,
         });
@@ -292,7 +314,7 @@ export const useTimeline = create<State>((set, get) => ({
   },
 
   saveNow: async () => {
-    const { projectId, imageClips, audioClips } = get();
+    const { projectId, imageClips, audioClips, imageTrackCount, audioTrackCount } = get();
     if (!projectId) return;
     set({ saving: true });
     try {
@@ -300,14 +322,18 @@ export const useTimeline = create<State>((set, get) => ({
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          imageTrackCount,
+          audioTrackCount,
           imageClips: imageClips.map((c) => ({
             assetId: c.assetId,
+            trackIndex: c.trackIndex,
             startTime: c.startTime,
             duration: c.duration,
             fitMode: c.fitMode,
           })),
           audioClips: audioClips.map((c) => ({
             assetId: c.assetId,
+            trackIndex: c.trackIndex,
             startTime: c.startTime,
             duration: c.duration,
           })),

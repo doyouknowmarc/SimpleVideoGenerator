@@ -23,6 +23,7 @@ export async function GET() {
     .map((c) => ({
       id: c.id,
       assetId: c.assetId,
+      trackIndex: c.trackIndex,
       startTime: c.startTime,
       duration: c.duration,
       fitMode: (c.fitMode ?? "contain") as FitMode,
@@ -33,6 +34,7 @@ export async function GET() {
     .map((c) => ({
       id: c.id,
       assetId: c.assetId,
+      trackIndex: c.trackIndex,
       startTime: c.startTime,
       duration: c.duration,
     }));
@@ -40,6 +42,8 @@ export async function GET() {
   return NextResponse.json({
     id: project.id,
     title: project.title,
+    imageTrackCount: project.imageTrackCount,
+    audioTrackCount: project.audioTrackCount,
     assets: assets.map((a) => ({
       id: a.id,
       projectId: a.projectId,

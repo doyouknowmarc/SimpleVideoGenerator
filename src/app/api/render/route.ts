@@ -9,8 +9,19 @@ import type { ImageClip, AudioClip, FitMode } from "@/types";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+function sanitizeFilename(input: string | undefined): string | null {
+  if (!input) return null;
+  const cleaned = input
+    .replace(/\.mp4$/i, "")
+    .replace(/[^a-zA-Z0-9 _\-.()]/g, "")
+    .trim()
+    .slice(0, 80);
+  return cleaned || null;
+}
+
 export async function POST(req: NextRequest) {
-  const { projectId } = (await req.json()) as { projectId: string };
+  const body = (await req.json()) as { projectId: string; filename?: string };
+  const { projectId } = body;
   if (!projectId) return NextResponse.json({ error: "projectId required" }, { status: 400 });
 
   const project = await prisma.project.findUnique({ where: { id: projectId } });
@@ -28,6 +39,7 @@ export async function POST(req: NextRequest) {
     .map((c) => ({
       id: c.id,
       assetId: c.assetId,
+      trackIndex: c.trackIndex,
       startTime: c.startTime,
       duration: c.duration,
       fitMode: (c.fitMode ?? "contain") as FitMode,
@@ -37,6 +49,7 @@ export async function POST(req: NextRequest) {
     .map((c) => ({
       id: c.id,
       assetId: c.assetId,
+      trackIndex: c.trackIndex,
       startTime: c.startTime,
       duration: c.duration,
     }));
@@ -52,8 +65,10 @@ export async function POST(req: NextRequest) {
   }
   if (errs.length) return NextResponse.json({ error: errs.join("; ") }, { status: 400 });
 
+  const filename = sanitizeFilename(body.filename);
+
   const job = await prisma.renderJob.create({
-    data: { projectId, status: "queued", progress: 0 },
+    data: { projectId, status: "queued", progress: 0, filename },
   });
 
   const workerScript = path.join(process.cwd(), "src", "lib", "render-worker.mjs");
