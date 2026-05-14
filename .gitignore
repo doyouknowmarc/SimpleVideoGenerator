@@ -1,0 +1,12 @@
+node_modules
+.next
+out
+.env
+storage/uploads/*
+storage/renders/*
+!storage/uploads/.gitkeep
+!storage/renders/.gitkeep
+prisma/dev.db
+prisma/dev.db-journal
+*.log
+.DS_Store
