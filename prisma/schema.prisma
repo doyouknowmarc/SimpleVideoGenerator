@@ -41,6 +41,7 @@ model TimelineClip {
   trackType  String
   trackIndex Int     @default(0)
   assetId    String
+  name       String?
   startTime  Float
   duration   Float
   fitMode    String?

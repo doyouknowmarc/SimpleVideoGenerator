@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { PrismaClient } from "@prisma/client";
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, writeFile, rename } from "node:fs/promises";
 import path from "node:path";
 
@@ -138,6 +139,14 @@ async function main() {
       data: { status: "running", progress: 0 },
     });
     const job = await prisma.renderJob.findUnique({ where: { id: jobId } });
+    if (!job) throw new Error(`Render job not found: ${jobId}`);
+
+    const project = await prisma.project.findUnique({
+      where: { id: job.projectId },
+      select: { id: true },
+    });
+    if (!project) throw new Error(`Project not found for render job: ${job.projectId}`);
+
     const clips = await prisma.timelineClip.findMany({
       where: { projectId: job.projectId },
       orderBy: { startTime: "asc" },
@@ -147,6 +156,19 @@ async function main() {
 
     const imageClips = clips.filter((c) => c.trackType === "image");
     const audioClips = clips.filter((c) => c.trackType === "audio");
+
+    for (const c of imageClips) {
+      const asset = assetMap.get(c.assetId);
+      if (!asset || asset.type !== "image" || !existsSync(asset.storagePath)) {
+        throw new Error(`Missing image asset for clip at ${c.startTime}s`);
+      }
+    }
+    for (const c of audioClips) {
+      const asset = assetMap.get(c.assetId);
+      if (!asset || asset.type !== "audio" || !existsSync(asset.storagePath)) {
+        throw new Error(`Missing audio asset for clip at ${c.startTime}s`);
+      }
+    }
 
     const allEnds = [...imageClips, ...audioClips].map((c) => c.startTime + c.duration);
     const totalDuration = allEnds.length > 0 ? Math.max(...allEnds) : 0;

@@ -2,7 +2,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useTimeline } from "@/state/timelineStore";
 import type { MediaAsset, TrackType } from "@/types";
-import { IconChevron } from "./icons";
+import { IconChevron, IconTrash } from "./icons";
 
 function fmtDuration(d?: number) {
   if (!d) return "";
@@ -65,11 +65,34 @@ function Section({
 }
 
 function AssetRow({ a, type }: { a: MediaAsset; type: TrackType }) {
+  const removeAsset = useTimeline((s) => s.removeAsset);
+  const [deleting, setDeleting] = useState(false);
+
+  async function deleteAsset() {
+    if (deleting) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/assets/${a.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Delete failed (${res.status})`);
+      }
+      removeAsset(a.id);
+    } catch (e) {
+      console.error(e);
+      setDeleting(false);
+    }
+  }
+
   return (
     <div
-      className="asset"
+      className={`asset ${deleting ? "deleting" : ""}`}
       draggable
       onDragStart={(e) => {
+        if (deleting) {
+          e.preventDefault();
+          return;
+        }
         e.dataTransfer.setData("text/plain", `asset:${a.id}`);
         e.dataTransfer.setData("application/x-asset-id", a.id);
         e.dataTransfer.setData("application/x-asset-type", type);
@@ -86,6 +109,20 @@ function AssetRow({ a, type }: { a: MediaAsset; type: TrackType }) {
           {type === "image" ? `${a.width}×${a.height}` : fmtDuration(a.duration)}
         </div>
       </div>
+      <button
+        type="button"
+        className="asset-delete-btn"
+        onClick={(e) => {
+          e.stopPropagation();
+          void deleteAsset();
+        }}
+        onMouseDown={(e) => e.stopPropagation()}
+        title={`Delete ${a.filename}`}
+        aria-label={`Delete ${a.filename}`}
+        disabled={deleting}
+      >
+        <IconTrash size={13} />
+      </button>
     </div>
   );
 }

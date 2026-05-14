@@ -91,6 +91,26 @@ export function IconTrash({ size = 16, strokeWidth = 2, className }: IconProps) 
   );
 }
 
+export function IconEye({ size = 16, strokeWidth = 2, className }: IconProps) {
+  return (
+    <svg {...svgProps(size, strokeWidth, className)}>
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+export function IconEyeOff({ size = 16, strokeWidth = 2, className }: IconProps) {
+  return (
+    <svg {...svgProps(size, strokeWidth, className)}>
+      <path d="M3 3l18 18" />
+      <path d="M10.6 10.6a2 2 0 0 0 2.8 2.8" />
+      <path d="M9.1 5.4A9.6 9.6 0 0 1 12 5c6.5 0 10 7 10 7a18.2 18.2 0 0 1-2.4 3.4" />
+      <path d="M6.4 6.9C3.6 8.8 2 12 2 12s3.5 7 10 7a9.9 9.9 0 0 0 4.1-.9" />
+    </svg>
+  );
+}
+
 export function IconFilm({ size = 14, strokeWidth = 2, className }: IconProps) {
   return (
     <svg {...svgProps(size, strokeWidth, className)}>

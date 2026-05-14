@@ -57,11 +57,11 @@ export async function POST(req: NextRequest) {
   const errs = validateClipsForRender(imageClips, audioClips);
   for (const c of imageClips) {
     const a = assetMap.get(c.assetId);
-    if (!a || !existsSync(a.storagePath)) errs.push(`Missing image asset for clip at ${c.startTime}s`);
+    if (!a || a.type !== "image" || !existsSync(a.storagePath)) errs.push(`Missing image asset for clip at ${c.startTime}s`);
   }
   for (const c of audioClips) {
     const a = assetMap.get(c.assetId);
-    if (!a || !existsSync(a.storagePath)) errs.push(`Missing audio asset for clip at ${c.startTime}s`);
+    if (!a || a.type !== "audio" || !existsSync(a.storagePath)) errs.push(`Missing audio asset for clip at ${c.startTime}s`);
   }
   if (errs.length) return NextResponse.json({ error: errs.join("; ") }, { status: 400 });
 

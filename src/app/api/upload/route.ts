@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { writeFile, mkdir } from "node:fs/promises";
+import { writeFile, mkdir, unlink } from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
 import { prisma } from "@/lib/db";
@@ -45,6 +45,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "file required" }, { status: 400 });
   }
 
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    select: { id: true },
+  });
+  if (!project) {
+    return NextResponse.json({ error: "project not found" }, { status: 404 });
+  }
+
   const isImage = IMAGE_MIME.has(file.type);
   const isAudio = AUDIO_MIME.has(file.type);
   if (!isImage && !isAudio) {
@@ -72,24 +80,31 @@ export async function POST(req: NextRequest) {
       duration = await ffprobeDuration(storagePath);
     }
   } catch (e) {
+    await unlink(storagePath).catch(() => {});
     return NextResponse.json(
       { error: `failed to read metadata: ${(e as Error).message}` },
       { status: 400 },
     );
   }
 
-  const asset = await prisma.mediaAsset.create({
-    data: {
-      projectId,
-      type: isImage ? "image" : "audio",
-      filename: file.name,
-      storagePath,
-      mimeType: file.type,
-      duration: duration ?? null,
-      width: width ?? null,
-      height: height ?? null,
-    },
-  });
+  let asset;
+  try {
+    asset = await prisma.mediaAsset.create({
+      data: {
+        projectId,
+        type: isImage ? "image" : "audio",
+        filename: file.name,
+        storagePath,
+        mimeType: file.type,
+        duration: duration ?? null,
+        width: width ?? null,
+        height: height ?? null,
+      },
+    });
+  } catch (e) {
+    await unlink(storagePath).catch(() => {});
+    throw e;
+  }
 
   return NextResponse.json({
     id: asset.id,

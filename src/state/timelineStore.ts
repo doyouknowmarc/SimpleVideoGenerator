@@ -17,6 +17,8 @@ type State = {
   title: string;
   imageTrackCount: number;
   audioTrackCount: number;
+  hiddenImageTracks: number[];
+  hiddenAudioTracks: number[];
   assets: MediaAsset[];
   imageClips: ImageClip[];
   audioClips: AudioClip[];
@@ -31,6 +33,7 @@ type State = {
   selectedTrack: TrackType | null;
   pixelsPerSecond: number;
   snapEnabled: boolean;
+  cutMode: boolean;
 
   // Actions
   load: () => Promise<void>;
@@ -41,13 +44,19 @@ type State = {
   addImageClip: (assetId: string, startTime: number, trackIndex?: number) => void;
   updateImageClip: (id: string, patch: Partial<ImageClip>) => void;
   removeImageClip: (id: string) => void;
+  cutImageClip: (id: string, cutTime: number) => void;
 
   addAudioClip: (assetId: string, startTime: number, duration: number, trackIndex?: number) => void;
   updateAudioClip: (id: string, patch: Partial<AudioClip>) => void;
   removeAudioClip: (id: string) => void;
+  cutAudioClip: (id: string, cutTime: number) => void;
 
   addImageTrack: () => void;
   addAudioTrack: () => void;
+  removeImageTrack: (trackIndex: number) => void;
+  removeAudioTrack: (trackIndex: number) => void;
+  toggleImageTrackHidden: (trackIndex: number) => void;
+  toggleAudioTrackHidden: (trackIndex: number) => void;
 
   duplicateSelected: () => void;
   deleteSelected: () => void;
@@ -62,6 +71,8 @@ type State = {
   selectClip: (id: string | null, track: TrackType | null) => void;
   setZoom: (pps: number) => void;
   toggleSnap: () => void;
+  toggleCutMode: () => void;
+  setCutMode: (enabled: boolean) => void;
 
   setTitle: (title: string) => Promise<void>;
 
@@ -74,6 +85,8 @@ export const useTimeline = create<State>((set, get) => ({
   title: "",
   imageTrackCount: 1,
   audioTrackCount: 1,
+  hiddenImageTracks: [],
+  hiddenAudioTracks: [],
   assets: [],
   imageClips: [],
   audioClips: [],
@@ -87,6 +100,7 @@ export const useTimeline = create<State>((set, get) => ({
   selectedTrack: null,
   pixelsPerSecond: 100,
   snapEnabled: true,
+  cutMode: false,
 
   load: async () => {
     const res = await fetch("/api/projects", { cache: "no-store" });
@@ -96,6 +110,8 @@ export const useTimeline = create<State>((set, get) => ({
       title: data.title,
       imageTrackCount: data.imageTrackCount ?? 1,
       audioTrackCount: data.audioTrackCount ?? 1,
+      hiddenImageTracks: [],
+      hiddenAudioTracks: [],
       assets: data.assets,
       imageClips: data.imageClips,
       audioClips: data.audioClips,
@@ -146,6 +162,30 @@ export const useTimeline = create<State>((set, get) => ({
     get().scheduleSave();
   },
 
+  cutImageClip: (id, cutTime) => {
+    let didCut = false;
+    set((s) => {
+      const src = s.imageClips.find((c) => c.id === id);
+      if (!src) return {};
+      const local = cutTime - src.startTime;
+      if (local <= 0.1 || src.duration - local <= 0.1) return {};
+      didCut = true;
+      const left: ImageClip = { ...src, duration: local };
+      const right: ImageClip = {
+        ...src,
+        id: nextId("img"),
+        startTime: cutTime,
+        duration: src.duration - local,
+      };
+      return {
+        imageClips: s.imageClips.flatMap((c) => (c.id === id ? [left, right] : [c])),
+        selectedClipId: right.id,
+        selectedTrack: "image",
+      };
+    });
+    if (didCut) get().scheduleSave();
+  },
+
   addAudioClip: (assetId, startTime, duration, trackIndex = 0) => {
     const newClip: AudioClip = {
       id: nextId("aud"),
@@ -171,6 +211,64 @@ export const useTimeline = create<State>((set, get) => ({
     get().scheduleSave();
   },
 
+  removeImageTrack: (trackIndex) => {
+    const state = get();
+    if (state.imageTrackCount <= 1 || trackIndex < 0 || trackIndex >= state.imageTrackCount) return;
+    set((s) => ({
+      imageTrackCount: s.imageTrackCount - 1,
+      hiddenImageTracks: s.hiddenImageTracks
+        .filter((idx) => idx !== trackIndex)
+        .map((idx) => (idx > trackIndex ? idx - 1 : idx)),
+      imageClips: s.imageClips
+        .filter((c) => c.trackIndex !== trackIndex)
+        .map((c) => (c.trackIndex > trackIndex ? { ...c, trackIndex: c.trackIndex - 1 } : c)),
+      selectedClipId: s.selectedTrack === "image" && s.imageClips.some((c) => c.id === s.selectedClipId && c.trackIndex === trackIndex)
+        ? null
+        : s.selectedClipId,
+      selectedTrack: s.selectedTrack === "image" && s.imageClips.some((c) => c.id === s.selectedClipId && c.trackIndex === trackIndex)
+        ? null
+        : s.selectedTrack,
+    }));
+    get().scheduleSave();
+  },
+
+  removeAudioTrack: (trackIndex) => {
+    const state = get();
+    if (state.audioTrackCount <= 1 || trackIndex < 0 || trackIndex >= state.audioTrackCount) return;
+    set((s) => ({
+      audioTrackCount: s.audioTrackCount - 1,
+      hiddenAudioTracks: s.hiddenAudioTracks
+        .filter((idx) => idx !== trackIndex)
+        .map((idx) => (idx > trackIndex ? idx - 1 : idx)),
+      audioClips: s.audioClips
+        .filter((c) => c.trackIndex !== trackIndex)
+        .map((c) => (c.trackIndex > trackIndex ? { ...c, trackIndex: c.trackIndex - 1 } : c)),
+      selectedClipId: s.selectedTrack === "audio" && s.audioClips.some((c) => c.id === s.selectedClipId && c.trackIndex === trackIndex)
+        ? null
+        : s.selectedClipId,
+      selectedTrack: s.selectedTrack === "audio" && s.audioClips.some((c) => c.id === s.selectedClipId && c.trackIndex === trackIndex)
+        ? null
+        : s.selectedTrack,
+    }));
+    get().scheduleSave();
+  },
+
+  toggleImageTrackHidden: (trackIndex) => {
+    set((s) => ({
+      hiddenImageTracks: s.hiddenImageTracks.includes(trackIndex)
+        ? s.hiddenImageTracks.filter((idx) => idx !== trackIndex)
+        : [...s.hiddenImageTracks, trackIndex],
+    }));
+  },
+
+  toggleAudioTrackHidden: (trackIndex) => {
+    set((s) => ({
+      hiddenAudioTracks: s.hiddenAudioTracks.includes(trackIndex)
+        ? s.hiddenAudioTracks.filter((idx) => idx !== trackIndex)
+        : [...s.hiddenAudioTracks, trackIndex],
+    }));
+  },
+
   updateAudioClip: (id, patch) => {
     set((s) => ({
       audioClips: s.audioClips.map((c) => (c.id === id ? { ...c, ...patch } : c)),
@@ -184,6 +282,30 @@ export const useTimeline = create<State>((set, get) => ({
       selectedTrack: s.selectedClipId === id ? null : s.selectedTrack,
     }));
     get().scheduleSave();
+  },
+
+  cutAudioClip: (id, cutTime) => {
+    let didCut = false;
+    set((s) => {
+      const src = s.audioClips.find((c) => c.id === id);
+      if (!src) return {};
+      const local = cutTime - src.startTime;
+      if (local <= 0.1 || src.duration - local <= 0.1) return {};
+      didCut = true;
+      const left: AudioClip = { ...src, duration: local };
+      const right: AudioClip = {
+        ...src,
+        id: nextId("aud"),
+        startTime: cutTime,
+        duration: src.duration - local,
+      };
+      return {
+        audioClips: s.audioClips.flatMap((c) => (c.id === id ? [left, right] : [c])),
+        selectedClipId: right.id,
+        selectedTrack: "audio",
+      };
+    });
+    if (didCut) get().scheduleSave();
   },
 
   duplicateSelected: () => {
@@ -286,9 +408,11 @@ export const useTimeline = create<State>((set, get) => ({
 
   selectClip: (id, track) => set({ selectedClipId: id, selectedTrack: track }),
 
-  setZoom: (pps) => set({ pixelsPerSecond: Math.max(2, Math.min(400, pps)) }),
+  setZoom: (pps) => set({ pixelsPerSecond: Math.max(0.5, Math.min(800, pps)) }),
 
   toggleSnap: () => set((s) => ({ snapEnabled: !s.snapEnabled })),
+  toggleCutMode: () => set((s) => ({ cutMode: !s.cutMode })),
+  setCutMode: (enabled) => set({ cutMode: enabled }),
 
   setTitle: async (title) => {
     const projectId = get().projectId;
@@ -326,6 +450,7 @@ export const useTimeline = create<State>((set, get) => ({
           audioTrackCount,
           imageClips: imageClips.map((c) => ({
             assetId: c.assetId,
+            name: c.name,
             trackIndex: c.trackIndex,
             startTime: c.startTime,
             duration: c.duration,
@@ -333,6 +458,7 @@ export const useTimeline = create<State>((set, get) => ({
           })),
           audioClips: audioClips.map((c) => ({
             assetId: c.assetId,
+            name: c.name,
             trackIndex: c.trackIndex,
             startTime: c.startTime,
             duration: c.duration,

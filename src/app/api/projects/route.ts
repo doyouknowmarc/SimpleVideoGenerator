@@ -23,6 +23,7 @@ export async function GET() {
     .map((c) => ({
       id: c.id,
       assetId: c.assetId,
+      name: c.name ?? undefined,
       trackIndex: c.trackIndex,
       startTime: c.startTime,
       duration: c.duration,
@@ -34,6 +35,7 @@ export async function GET() {
     .map((c) => ({
       id: c.id,
       assetId: c.assetId,
+      name: c.name ?? undefined,
       trackIndex: c.trackIndex,
       startTime: c.startTime,
       duration: c.duration,

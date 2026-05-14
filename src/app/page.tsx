@@ -62,7 +62,6 @@ export default function Page() {
       <div className="app-body">
         {sidebarVisible && (
           <SidebarResize>
-            <h2 className="asset-panel-title">Library</h2>
             <AddMediaButton onClick={() => setWizardOpen(true)} />
             <AssetLibrary />
           </SidebarResize>

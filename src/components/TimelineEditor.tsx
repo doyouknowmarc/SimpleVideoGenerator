@@ -8,9 +8,10 @@ import { EditableTimecode } from "./EditableTimecode";
 import { computeTotalDuration, snapToGrid } from "@/lib/timelineHelpers";
 import type { TrackType } from "@/types";
 import {
-  IconZoom, IconFilm, IconVolume, IconPlay, IconPause,
-  IconSkipBack, IconSkipForward, IconDuplicate, IconTrash,
+  IconFilm, IconVolume, IconPlay, IconPause,
+  IconSkipBack, IconSkipForward, IconDuplicate, IconTrash, IconEye, IconEyeOff, IconScissors,
 } from "./icons";
+import { ZoomControl } from "./ZoomControl";
 
 export const TIMELINE_LEFT_PAD = 12; // px of breathing room at start of timeline
 
@@ -41,6 +42,7 @@ type ResizeLeftDrag = {
 };
 type PlayheadDrag = { kind: "playhead"; pointerStartX: number };
 type DragState = MoveDrag | ResizeRightDrag | ResizeLeftDrag | PlayheadDrag | null;
+type SelectedTrackRow = { type: TrackType; index: number } | null;
 
 export function TimelineEditor() {
   const imageClips = useTimeline((s) => s.imageClips);
@@ -48,6 +50,8 @@ export function TimelineEditor() {
   const assets = useTimeline((s) => s.assets);
   const imageTrackCount = useTimeline((s) => s.imageTrackCount);
   const audioTrackCount = useTimeline((s) => s.audioTrackCount);
+  const hiddenImageTracks = useTimeline((s) => s.hiddenImageTracks);
+  const hiddenAudioTracks = useTimeline((s) => s.hiddenAudioTracks);
   const playheadTime = useTimeline((s) => s.playheadTime);
   const playing = useTimeline((s) => s.playing);
   const togglePlay = useTimeline((s) => s.togglePlay);
@@ -57,15 +61,23 @@ export function TimelineEditor() {
   const pps = useTimeline((s) => s.pixelsPerSecond);
   const snapEnabled = useTimeline((s) => s.snapEnabled);
   const toggleSnap = useTimeline((s) => s.toggleSnap);
+  const cutMode = useTimeline((s) => s.cutMode);
+  const toggleCutMode = useTimeline((s) => s.toggleCutMode);
 
   const updateImageClip = useTimeline((s) => s.updateImageClip);
   const updateAudioClip = useTimeline((s) => s.updateAudioClip);
   const removeImageClip = useTimeline((s) => s.removeImageClip);
   const removeAudioClip = useTimeline((s) => s.removeAudioClip);
+  const cutImageClip = useTimeline((s) => s.cutImageClip);
+  const cutAudioClip = useTimeline((s) => s.cutAudioClip);
   const addImageClip = useTimeline((s) => s.addImageClip);
   const addAudioClip = useTimeline((s) => s.addAudioClip);
   const addImageTrack = useTimeline((s) => s.addImageTrack);
   const addAudioTrack = useTimeline((s) => s.addAudioTrack);
+  const removeImageTrack = useTimeline((s) => s.removeImageTrack);
+  const removeAudioTrack = useTimeline((s) => s.removeAudioTrack);
+  const toggleImageTrackHidden = useTimeline((s) => s.toggleImageTrackHidden);
+  const toggleAudioTrackHidden = useTimeline((s) => s.toggleAudioTrackHidden);
   const setPlayhead = useTimeline((s) => s.setPlayhead);
   const selectClip = useTimeline((s) => s.selectClip);
   const setZoom = useTimeline((s) => s.setZoom);
@@ -76,6 +88,7 @@ export function TimelineEditor() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [dragState, setDragState] = useState<DragState>(null);
   const [dragOverTrack, setDragOverTrack] = useState<string | null>(null);
+  const [selectedTrackRow, setSelectedTrackRow] = useState<SelectedTrackRow>(null);
 
   const total = computeTotalDuration(imageClips, audioClips);
   const minSeconds = Math.max(total + 5, 30);
@@ -253,6 +266,43 @@ export function TimelineEditor() {
   function onTrackBackgroundMouseDown(e: ReactMouseEvent<HTMLDivElement>) {
     if (e.target === e.currentTarget) selectClip(null, null);
   }
+  function selectTrackRow(type: TrackType, index: number) {
+    setSelectedTrackRow({ type, index });
+    selectClip(null, null);
+  }
+  function selectClipInTimeline(id: string, track: TrackType) {
+    setSelectedTrackRow(null);
+    selectClip(id, track);
+  }
+  function renameImageClip(id: string, name: string) {
+    updateImageClip(id, { name });
+    scheduleSave();
+  }
+  function renameAudioClip(id: string, name: string) {
+    updateAudioClip(id, { name });
+    scheduleSave();
+  }
+  function selectedTrackHidden() {
+    if (!selectedTrackRow) return false;
+    return selectedTrackRow.type === "image"
+      ? hiddenImageTracks.includes(selectedTrackRow.index)
+      : hiddenAudioTracks.includes(selectedTrackRow.index);
+  }
+  function selectedTrackCanDelete() {
+    if (!selectedTrackRow) return false;
+    return selectedTrackRow.type === "image" ? imageTrackCount > 1 : audioTrackCount > 1;
+  }
+  function toggleSelectedTrackHidden() {
+    if (!selectedTrackRow) return;
+    if (selectedTrackRow.type === "image") toggleImageTrackHidden(selectedTrackRow.index);
+    else toggleAudioTrackHidden(selectedTrackRow.index);
+  }
+  function deleteSelectedTrackRow() {
+    if (!selectedTrackRow || !selectedTrackCanDelete()) return;
+    if (selectedTrackRow.type === "image") removeImageTrack(selectedTrackRow.index);
+    else removeAudioTrack(selectedTrackRow.index);
+    setSelectedTrackRow(null);
+  }
 
   // Skip to previous/next clip boundary (image clip starts).
   function jumpPrev() {
@@ -270,13 +320,24 @@ export function TimelineEditor() {
   const selectedImageClip = selectedTrack === "image"
     ? imageClips.find((c) => c.id === selectedClipId)
     : null;
+  const selectedTrackLabel = selectedTrackRow
+    ? `${selectedTrackRow.type === "image" ? "Image" : "Audio"} ${selectedTrackRow.index + 1}`
+    : null;
+  const isSelectedTrackHidden = selectedTrackHidden();
 
   const dragHoverKey = (track: TrackType, idx: number) => `${track}-${idx}`;
 
   return (
-    <div className="timeline-editor">
+    <div className={`timeline-editor ${cutMode ? "cut-mode" : ""}`}>
       <div className="timeline-toolbar">
         <div className="toolbar-left">
+          <button
+            className={`toolbar-btn ${cutMode ? "active" : ""}`}
+            onClick={toggleCutMode}
+            title={cutMode ? "Disable cut tool" : "Cut clips"}
+          >
+            <IconScissors size={14} />
+          </button>
           <button
             className="toolbar-btn"
             onClick={duplicateSelected}
@@ -306,6 +367,26 @@ export function TimelineEditor() {
                 <option value="contain">Contain</option>
                 <option value="cover">Cover</option>
               </select>
+            </div>
+          )}
+          {selectedTrackRow && (
+            <div className="selection-info track-selection-info">
+              <span>{selectedTrackLabel}</span>
+              <button
+                className="toolbar-btn"
+                onClick={toggleSelectedTrackHidden}
+                title={isSelectedTrackHidden ? "Show track" : "Hide track"}
+              >
+                {isSelectedTrackHidden ? <IconEyeOff size={14} /> : <IconEye size={14} />}
+              </button>
+              <button
+                className="toolbar-btn danger"
+                onClick={deleteSelectedTrackRow}
+                disabled={!selectedTrackCanDelete()}
+                title={selectedTrackCanDelete() ? "Delete track" : "At least one track is required"}
+              >
+                <IconTrash size={14} />
+              </button>
             </div>
           )}
         </div>
@@ -343,18 +424,7 @@ export function TimelineEditor() {
         </div>
 
         <div className="toolbar-right">
-          <div className="zoom-control">
-            <IconZoom />
-            <input
-              type="range"
-              min={2}
-              max={400}
-              step={1}
-              value={pps}
-              onChange={(e) => setZoom(Number(e.target.value))}
-              title={`Zoom: ${pps} px/s`}
-            />
-          </div>
+          <ZoomControl value={pps} onChange={setZoom} />
           <button
             type="button"
             className={`snap-toggle ${snapEnabled ? "on" : ""}`}
@@ -369,30 +439,52 @@ export function TimelineEditor() {
       <div className="timeline-body">
         <div className="timeline-labels">
           <div className="timeline-label-ruler" />
-          {Array.from({ length: imageTrackCount }).map((_, idx) => (
-            <div className="timeline-label-cell" key={`img-${idx}`} title={`Image track ${idx + 1}`}>
-              <IconFilm size={16} />
-            </div>
-          ))}
           <button
             className="add-track-btn"
             onClick={addImageTrack}
-            title="Add image track"
+            title="Add image track above"
           >
             <span className="plus">+</span>
           </button>
-          {Array.from({ length: audioTrackCount }).map((_, idx) => (
-            <div className="timeline-label-cell" key={`aud-${idx}`} title={`Audio track ${idx + 1}`}>
-              <IconVolume size={16} />
-            </div>
-          ))}
+          {Array.from({ length: imageTrackCount }).map((_, i) => {
+            const idx = imageTrackCount - 1 - i;
+            const hidden = hiddenImageTracks.includes(idx);
+            const selected = selectedTrackRow?.type === "image" && selectedTrackRow.index === idx;
+            return (
+              <button
+                type="button"
+                className={`timeline-label-cell track-label-btn ${selected ? "selected" : ""} ${hidden ? "hidden" : ""}`}
+                key={`img-${idx}`}
+                title={`Select image track ${idx + 1}`}
+                onClick={() => selectTrackRow("image", idx)}
+              >
+                {hidden ? <IconEyeOff size={15} /> : <IconFilm size={16} />}
+              </button>
+            );
+          })}
           <button
             className="add-track-btn"
             onClick={addAudioTrack}
-            title="Add audio track"
+            title="Add audio track above"
           >
             <span className="plus">+</span>
           </button>
+          {Array.from({ length: audioTrackCount }).map((_, i) => {
+            const idx = audioTrackCount - 1 - i;
+            const hidden = hiddenAudioTracks.includes(idx);
+            const selected = selectedTrackRow?.type === "audio" && selectedTrackRow.index === idx;
+            return (
+              <button
+                type="button"
+                className={`timeline-label-cell track-label-btn ${selected ? "selected" : ""} ${hidden ? "hidden" : ""}`}
+                key={`aud-${idx}`}
+                title={`Select audio track ${idx + 1}`}
+                onClick={() => selectTrackRow("audio", idx)}
+              >
+                {hidden ? <IconEyeOff size={15} /> : <IconVolume size={16} />}
+              </button>
+            );
+          })}
         </div>
         <div className="timeline-scroll" ref={scrollRef}>
           <div className="timeline-tracks" style={{ width: trackWidth }}>
@@ -405,12 +497,15 @@ export function TimelineEditor() {
               />
             </div>
 
-            {Array.from({ length: imageTrackCount }).map((_, idx) => {
+            <div className="add-track-row" />
+            {Array.from({ length: imageTrackCount }).map((_, i) => {
+              const idx = imageTrackCount - 1 - i;
               const key = dragHoverKey("image", idx);
+              const hidden = hiddenImageTracks.includes(idx);
               return (
                 <div
                   key={`img-${idx}`}
-                  className={`timeline-track image ${dragOverTrack === key ? "drag-over" : ""}`}
+                  className={`timeline-track image ${dragOverTrack === key ? "drag-over" : ""} ${hidden ? "hidden-track" : ""}`}
                   onMouseDown={onTrackBackgroundMouseDown}
                   onDragOver={(e) => {
                     e.preventDefault();
@@ -422,6 +517,7 @@ export function TimelineEditor() {
                 >
                   {imageClips
                     .filter((c) => c.trackIndex === idx)
+                    .filter(() => !hidden)
                     .map((c) => {
                       const asset = assets.find((a) => a.id === c.assetId);
                       return (
@@ -433,28 +529,33 @@ export function TimelineEditor() {
                           pixelsPerSecond={pps}
                           leftPad={TIMELINE_LEFT_PAD}
                           trackType="image"
-                          label={asset?.filename ?? "(missing)"}
+                          label={c.name || asset?.filename || "(missing)"}
                           thumbUrl={asset?.url}
                           isSelected={selectedClipId === c.id && selectedTrack === "image"}
+                          cutMode={cutMode}
                           onBodyMouseDown={(e) => startMove("image", idx, c.id, c.startTime, e)}
                           onLeftHandleMouseDown={(e) => startResizeLeft("image", idx, c.id, c.startTime, c.duration, e)}
                           onRightHandleMouseDown={(e) => startResizeRight("image", idx, c.id, c.duration, e)}
-                          onSelect={() => selectClip(c.id, "image")}
+                          onSelect={() => selectClipInTimeline(c.id, "image")}
                           onDelete={() => removeImageClip(c.id)}
+                          onRename={(name) => renameImageClip(c.id, name)}
+                          onCut={(cutTime) => cutImageClip(c.id, cutTime)}
                         />
                       );
                     })}
                 </div>
               );
             })}
-            <div className="add-track-row" />
 
-            {Array.from({ length: audioTrackCount }).map((_, idx) => {
+            <div className="add-track-row" />
+            {Array.from({ length: audioTrackCount }).map((_, i) => {
+              const idx = audioTrackCount - 1 - i;
               const key = dragHoverKey("audio", idx);
+              const hidden = hiddenAudioTracks.includes(idx);
               return (
                 <div
                   key={`aud-${idx}`}
-                  className={`timeline-track audio ${dragOverTrack === key ? "drag-over" : ""}`}
+                  className={`timeline-track audio ${dragOverTrack === key ? "drag-over" : ""} ${hidden ? "hidden-track" : ""}`}
                   onMouseDown={onTrackBackgroundMouseDown}
                   onDragOver={(e) => {
                     e.preventDefault();
@@ -466,6 +567,7 @@ export function TimelineEditor() {
                 >
                   {audioClips
                     .filter((c) => c.trackIndex === idx)
+                    .filter(() => !hidden)
                     .map((c) => {
                       const asset = assets.find((a) => a.id === c.assetId);
                       return (
@@ -477,20 +579,23 @@ export function TimelineEditor() {
                           pixelsPerSecond={pps}
                           leftPad={TIMELINE_LEFT_PAD}
                           trackType="audio"
-                          label={asset?.filename ?? "(missing)"}
+                          label={c.name || asset?.filename || "(missing)"}
+                          waveformUrl={`/api/assets/${c.assetId}/waveform`}
                           isSelected={selectedClipId === c.id && selectedTrack === "audio"}
+                          cutMode={cutMode}
                           onBodyMouseDown={(e) => startMove("audio", idx, c.id, c.startTime, e)}
                           onLeftHandleMouseDown={(e) => startResizeLeft("audio", idx, c.id, c.startTime, c.duration, e)}
                           onRightHandleMouseDown={(e) => startResizeRight("audio", idx, c.id, c.duration, e)}
-                          onSelect={() => selectClip(c.id, "audio")}
+                          onSelect={() => selectClipInTimeline(c.id, "audio")}
                           onDelete={() => removeAudioClip(c.id)}
+                          onRename={(name) => renameAudioClip(c.id, name)}
+                          onCut={(cutTime) => cutAudioClip(c.id, cutTime)}
                         />
                       );
                     })}
                 </div>
               );
             })}
-            <div className="add-track-row" />
 
             <div className="playhead" style={{ left: TIMELINE_LEFT_PAD + playheadTime * pps }}>
               <div className="playhead-head" onMouseDown={onPlayheadMouseDown} />

@@ -17,6 +17,7 @@ export type FitMode = "cover" | "contain";
 export type ImageClip = {
   id: string;
   assetId: string;
+  name?: string;
   trackIndex: number;
   startTime: number;
   duration: number;
@@ -26,6 +27,7 @@ export type ImageClip = {
 export type AudioClip = {
   id: string;
   assetId: string;
+  name?: string;
   trackIndex: number;
   startTime: number;
   duration: number;
