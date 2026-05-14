@@ -24,6 +24,7 @@ type State = {
 
   // Timeline UI state
   playheadTime: number;
+  playing: boolean;
   selectedClipId: string | null;
   selectedTrack: TrackType | null;
   pixelsPerSecond: number;
@@ -51,6 +52,8 @@ type State = {
   ) => void;
 
   setPlayhead: (t: number) => void;
+  setPlaying: (p: boolean) => void;
+  togglePlay: () => void;
   selectClip: (id: string | null, track: TrackType | null) => void;
   setZoom: (pps: number) => void;
   toggleSnap: () => void;
@@ -72,6 +75,7 @@ export const useTimeline = create<State>((set, get) => ({
   saveTimer: null,
 
   playheadTime: 0,
+  playing: false,
   selectedClipId: null,
   selectedTrack: null,
   pixelsPerSecond: 100,
@@ -246,10 +250,21 @@ export const useTimeline = create<State>((set, get) => ({
   },
 
   setPlayhead: (t) => set({ playheadTime: Math.max(0, t) }),
+  setPlaying: (p) => set({ playing: p }),
+  togglePlay: () => {
+    const s = get();
+    const ends: number[] = [];
+    for (const c of s.imageClips) ends.push(c.startTime + c.duration);
+    for (const c of s.audioClips) ends.push(c.startTime + c.duration);
+    const total = ends.length > 0 ? Math.max(...ends) : 0;
+    if (total <= 0) return;
+    if (s.playheadTime >= total) set({ playheadTime: 0 });
+    set({ playing: !s.playing });
+  },
 
   selectClip: (id, track) => set({ selectedClipId: id, selectedTrack: track }),
 
-  setZoom: (pps) => set({ pixelsPerSecond: Math.max(20, Math.min(400, pps)) }),
+  setZoom: (pps) => set({ pixelsPerSecond: Math.max(2, Math.min(400, pps)) }),
 
   toggleSnap: () => set((s) => ({ snapEnabled: !s.snapEnabled })),
 

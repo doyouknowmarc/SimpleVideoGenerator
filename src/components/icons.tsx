@@ -125,6 +125,15 @@ export function IconClose({ size = 16, strokeWidth = 2, className }: IconProps) 
   );
 }
 
+export function IconSidebar({ size = 16, strokeWidth = 2, className }: IconProps) {
+  return (
+    <svg {...svgProps(size, strokeWidth, className)}>
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <line x1="9" y1="3" x2="9" y2="21" />
+    </svg>
+  );
+}
+
 export function IconChevron({ size = 14, strokeWidth = 2, className }: IconProps) {
   return (
     <svg {...svgProps(size, strokeWidth, className)}>

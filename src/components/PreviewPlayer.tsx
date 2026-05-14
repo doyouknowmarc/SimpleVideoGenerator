@@ -1,8 +1,7 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { useTimeline } from "@/state/timelineStore";
 import { computeTotalDuration } from "@/lib/timelineHelpers";
-import { TransportControls } from "./TransportControls";
 
 export function PreviewPlayer() {
   const imageClips = useTimeline((s) => s.imageClips);
@@ -10,8 +9,9 @@ export function PreviewPlayer() {
   const assets = useTimeline((s) => s.assets);
   const playheadTime = useTimeline((s) => s.playheadTime);
   const setPlayhead = useTimeline((s) => s.setPlayhead);
+  const playing = useTimeline((s) => s.playing);
+  const setPlaying = useTimeline((s) => s.setPlaying);
 
-  const [playing, setPlaying] = useState(false);
   const rafRef = useRef<number | null>(null);
   const lastFrameRef = useRef<number>(0);
   const audioRefs = useRef<Record<string, HTMLAudioElement | null>>({});
@@ -30,6 +30,7 @@ export function PreviewPlayer() {
     (c) => playheadTime >= c.startTime && playheadTime < c.startTime + c.duration,
   );
 
+  // Playback loop, driven by store's `playing`
   useEffect(() => {
     if (!playing) {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -54,8 +55,9 @@ export function PreviewPlayer() {
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
-  }, [playing, total, setPlayhead]);
+  }, [playing, total, setPlayhead, setPlaying]);
 
+  // Audio sync
   useEffect(() => {
     const activeIds = new Set(activeAudioClips.map((c) => c.id));
     for (const id of activeClipsRef.current) {
@@ -83,27 +85,6 @@ export function PreviewPlayer() {
     activeClipsRef.current = activeIds;
   }, [activeAudioClips, playing, playheadTime]);
 
-  // Expose play toggle to outside via global keyboard handler in TimelineEditor
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.code !== "Space") return;
-      const target = e.target as HTMLElement | null;
-      if (target && (target.tagName === "INPUT" || target.tagName === "SELECT" || target.tagName === "TEXTAREA")) return;
-      if (target?.closest(".modal")) return;
-      e.preventDefault();
-      togglePlay();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [total]);
-
-  function togglePlay() {
-    if (total <= 0) return;
-    if (playheadTime >= total) setPlayhead(0);
-    setPlaying((p) => !p);
-  }
-
   return (
     <>
       <div className="preview-stage">
@@ -121,15 +102,6 @@ export function PreviewPlayer() {
           </div>
         )}
       </div>
-      <TransportControls
-        playing={playing}
-        currentTime={playheadTime}
-        totalDuration={total}
-        onPlayToggle={togglePlay}
-        onStepBack={() => { setPlaying(false); setPlayhead(0); }}
-        onStepForward={() => { setPlaying(false); setPlayhead(total); }}
-        disabled={total <= 0}
-      />
       {audioClips.map((c) => {
         const asset = assets.find((a) => a.id === c.assetId);
         if (!asset) return null;

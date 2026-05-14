@@ -74,7 +74,7 @@ export function ExportButton() {
     : "Export MP4";
 
   return (
-    <>
+    <div className="export-wrap">
       <button
         className="btn"
         onClick={() => {
@@ -111,6 +111,6 @@ export function ExportButton() {
           )}
         </div>
       )}
-    </>
+    </div>
   );
 }

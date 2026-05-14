@@ -6,8 +6,10 @@ import { TimelineRuler } from "./TimelineRuler";
 import { TimelineClip } from "./TimelineClip";
 import { computeTotalDuration, snapToGrid } from "@/lib/timelineHelpers";
 import type { TrackType } from "@/types";
-import { IconZoom, IconFilm, IconVolume } from "./icons";
-import { BottomToolbar } from "./BottomToolbar";
+import {
+  IconZoom, IconFilm, IconVolume, IconPlay, IconPause,
+  IconSkipBack, IconSkipForward, IconDuplicate, IconTrash,
+} from "./icons";
 
 type MoveDrag = {
   kind: "move";
@@ -16,7 +18,6 @@ type MoveDrag = {
   pointerStartX: number;
   clipStartTimeAtPointerDown: number;
 };
-
 type ResizeRightDrag = {
   kind: "resize-right";
   track: TrackType;
@@ -24,7 +25,6 @@ type ResizeRightDrag = {
   pointerStartX: number;
   originalDuration: number;
 };
-
 type ResizeLeftDrag = {
   kind: "resize-left";
   track: TrackType;
@@ -33,22 +33,34 @@ type ResizeLeftDrag = {
   originalStart: number;
   originalDuration: number;
 };
-
 type PlayheadDrag = { kind: "playhead"; pointerStartX: number };
-
 type DragState = MoveDrag | ResizeRightDrag | ResizeLeftDrag | PlayheadDrag | null;
+
+function fmtTimecode(t: number) {
+  if (!isFinite(t) || t < 0) t = 0;
+  const totalSec = Math.floor(t);
+  const ms = t - totalSec;
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  const frames = Math.floor(ms * 30);
+  const pad = (n: number, l = 2) => String(n).padStart(l, "0");
+  return `${pad(h)}:${pad(m)}:${pad(s)}.${pad(frames)}`;
+}
 
 export function TimelineEditor() {
   const imageClips = useTimeline((s) => s.imageClips);
   const audioClips = useTimeline((s) => s.audioClips);
   const assets = useTimeline((s) => s.assets);
   const playheadTime = useTimeline((s) => s.playheadTime);
+  const playing = useTimeline((s) => s.playing);
+  const togglePlay = useTimeline((s) => s.togglePlay);
+  const setPlaying = useTimeline((s) => s.setPlaying);
   const selectedClipId = useTimeline((s) => s.selectedClipId);
   const selectedTrack = useTimeline((s) => s.selectedTrack);
   const pps = useTimeline((s) => s.pixelsPerSecond);
   const snapEnabled = useTimeline((s) => s.snapEnabled);
-  const duplicateSelected = useTimeline((s) => s.duplicateSelected);
-  const deleteSelected = useTimeline((s) => s.deleteSelected);
+  const toggleSnap = useTimeline((s) => s.toggleSnap);
 
   const updateImageClip = useTimeline((s) => s.updateImageClip);
   const updateAudioClip = useTimeline((s) => s.updateAudioClip);
@@ -60,16 +72,15 @@ export function TimelineEditor() {
   const selectClip = useTimeline((s) => s.selectClip);
   const setZoom = useTimeline((s) => s.setZoom);
   const scheduleSave = useTimeline((s) => s.scheduleSave);
+  const duplicateSelected = useTimeline((s) => s.duplicateSelected);
+  const deleteSelected = useTimeline((s) => s.deleteSelected);
 
   const scrollRef = useRef<HTMLDivElement>(null);
-  const imageTrackRef = useRef<HTMLDivElement>(null);
-  const audioTrackRef = useRef<HTMLDivElement>(null);
   const [dragState, setDragState] = useState<DragState>(null);
   const [imgDragOver, setImgDragOver] = useState(false);
   const [audDragOver, setAudDragOver] = useState(false);
 
   const total = computeTotalDuration(imageClips, audioClips);
-  // Make the tracks at least 30s wide or as wide as the scroll container.
   const minSeconds = Math.max(total + 5, 30);
   const containerWidth = scrollRef.current?.clientWidth ?? 800;
   const trackWidth = Math.max(minSeconds * pps, containerWidth);
@@ -89,7 +100,6 @@ export function TimelineEditor() {
     if (!snapEnabled) return Math.max(0, t);
     const gridSnapped = snapToGrid(t);
     if (edges.length === 0) return gridSnapped;
-    // Snap to nearest edge within 0.3s of t (in seconds; tighter at higher zoom)
     const tolerance = Math.max(0.05, 8 / pps);
     let best = gridSnapped;
     let bestDist = Math.abs(t - gridSnapped);
@@ -119,7 +129,6 @@ export function TimelineEditor() {
         setPlayhead(t);
         return;
       }
-
       if (dragState.kind === "move") {
         const edges = neighborEdges(dragState.track, dragState.clipId);
         const rawStart = Math.max(0, dragState.clipStartTimeAtPointerDown + deltaSec);
@@ -128,7 +137,6 @@ export function TimelineEditor() {
         else updateAudioClip(dragState.clipId, { startTime: newStart });
         return;
       }
-
       if (dragState.kind === "resize-right") {
         const clipStart = dragState.track === "image"
           ? imageClips.find((c) => c.id === dragState.clipId)?.startTime ?? 0
@@ -141,7 +149,6 @@ export function TimelineEditor() {
         else updateAudioClip(dragState.clipId, { duration: newDuration });
         return;
       }
-
       if (dragState.kind === "resize-left") {
         const rightEdge = dragState.originalStart + dragState.originalDuration;
         const edges = neighborEdges(dragState.track, dragState.clipId);
@@ -159,9 +166,7 @@ export function TimelineEditor() {
     };
 
     const onMouseUp = () => {
-      if (dragState && dragState.kind !== "playhead") {
-        scheduleSave();
-      }
+      if (dragState && dragState.kind !== "playhead") scheduleSave();
       setDragState(null);
     };
 
@@ -179,21 +184,20 @@ export function TimelineEditor() {
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === "INPUT" || target.tagName === "SELECT" || target.tagName === "TEXTAREA")) return;
       if (target?.closest(".modal")) return;
+      if (e.code === "Space") {
+        e.preventDefault();
+        togglePlay();
+        return;
+      }
       if (e.key === "Delete" || e.key === "Backspace") {
-        if (selectedClipId) {
-          e.preventDefault();
-          deleteSelected();
-        }
+        if (selectedClipId) { e.preventDefault(); deleteSelected(); }
       } else if (e.key === "d" && (e.metaKey || e.ctrlKey)) {
-        if (selectedClipId) {
-          e.preventDefault();
-          duplicateSelected();
-        }
+        if (selectedClipId) { e.preventDefault(); duplicateSelected(); }
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [selectedClipId, duplicateSelected, deleteSelected]);
+  }, [selectedClipId, duplicateSelected, deleteSelected, togglePlay]);
 
   function pointerXInScroll(e: ReactMouseEvent | MouseEvent): number {
     const scrollEl = scrollRef.current;
@@ -204,52 +208,35 @@ export function TimelineEditor() {
 
   function startMove(track: TrackType, clipId: string, clipStart: number, e: ReactMouseEvent) {
     setDragState({
-      kind: "move",
-      track,
-      clipId,
+      kind: "move", track, clipId,
       pointerStartX: pointerXInScroll(e),
       clipStartTimeAtPointerDown: clipStart,
     });
   }
-
   function startResizeRight(track: TrackType, clipId: string, origDur: number, e: ReactMouseEvent) {
     setDragState({
-      kind: "resize-right",
-      track,
-      clipId,
+      kind: "resize-right", track, clipId,
       pointerStartX: pointerXInScroll(e),
       originalDuration: origDur,
     });
   }
-
-  function startResizeLeft(
-    track: TrackType,
-    clipId: string,
-    origStart: number,
-    origDur: number,
-    e: ReactMouseEvent,
-  ) {
+  function startResizeLeft(track: TrackType, clipId: string, origStart: number, origDur: number, e: ReactMouseEvent) {
     setDragState({
-      kind: "resize-left",
-      track,
-      clipId,
+      kind: "resize-left", track, clipId,
       pointerStartX: pointerXInScroll(e),
       originalStart: origStart,
       originalDuration: origDur,
     });
   }
-
   function onRulerMouseDown(e: ReactMouseEvent<HTMLDivElement>) {
     const pointerX = pointerXInScroll(e);
-    setPlayhead(snapToGrid(pointerX / pps));
+    setPlayhead(snapEnabled ? snapToGrid(pointerX / pps) : Math.max(0, pointerX / pps));
     setDragState({ kind: "playhead", pointerStartX: pointerX });
   }
-
   function onPlayheadMouseDown(e: ReactMouseEvent<HTMLDivElement>) {
     e.stopPropagation();
     setDragState({ kind: "playhead", pointerStartX: pointerXInScroll(e) });
   }
-
   function onTrackDrop(e: DragEvent<HTMLDivElement>, track: TrackType) {
     e.preventDefault();
     setImgDragOver(false);
@@ -266,63 +253,111 @@ export function TimelineEditor() {
       addAudioClip(assetId, t, asset?.duration ?? 5);
     }
   }
-
   function onTrackBackgroundMouseDown(e: ReactMouseEvent<HTMLDivElement>) {
-    // Clicking empty track space deselects.
-    if (e.target === e.currentTarget) {
-      selectClip(null, null);
-    }
+    if (e.target === e.currentTarget) selectClip(null, null);
   }
+  function jumpStart() { setPlaying(false); setPlayhead(0); }
+  function jumpEnd() { setPlaying(false); setPlayhead(total); }
 
+  const hasSelection = !!selectedClipId;
   const selectedImageClip = selectedTrack === "image"
     ? imageClips.find((c) => c.id === selectedClipId)
-    : null;
-  const selectedAudioClip = selectedTrack === "audio"
-    ? audioClips.find((c) => c.id === selectedClipId)
     : null;
 
   return (
     <div className="timeline-editor">
-      <div className="timeline-header">
+      <div className="timeline-toolbar">
+        {/* Transport */}
+        <div className="toolbar-group">
+          <button className="toolbar-btn" onClick={jumpStart} disabled={total <= 0} title="Jump to start">
+            <IconSkipBack size={14} />
+          </button>
+          <button
+            className={`toolbar-btn play ${playing ? "playing" : ""}`}
+            onClick={togglePlay}
+            disabled={total <= 0}
+            title={playing ? "Pause (Space)" : "Play (Space)"}
+          >
+            {playing ? <IconPause size={14} /> : <IconPlay size={14} />}
+          </button>
+          <button className="toolbar-btn" onClick={jumpEnd} disabled={total <= 0} title="Jump to end">
+            <IconSkipForward size={14} />
+          </button>
+          <span className="timecode toolbar-timecode">
+            {fmtTimecode(playheadTime)} / {fmtTimecode(total)}
+          </span>
+        </div>
+
+        <div className="toolbar-separator" />
+
+        {/* Selection actions */}
+        <div className="toolbar-group">
+          <button
+            className="toolbar-btn"
+            onClick={duplicateSelected}
+            disabled={!hasSelection}
+            title="Duplicate (⌘D)"
+          >
+            <IconDuplicate size={14} />
+          </button>
+          <button
+            className="toolbar-btn danger"
+            onClick={deleteSelected}
+            disabled={!hasSelection}
+            title="Delete (Del)"
+          >
+            <IconTrash size={14} />
+          </button>
+        </div>
+
+        {selectedImageClip && (
+          <>
+            <div className="toolbar-separator" />
+            <div className="selection-info">
+              <label>Fit:</label>
+              <select
+                value={selectedImageClip.fitMode}
+                onChange={(e) => {
+                  updateImageClip(selectedImageClip.id, { fitMode: e.target.value as "cover" | "contain" });
+                  scheduleSave();
+                }}
+              >
+                <option value="contain">Contain</option>
+                <option value="cover">Cover</option>
+              </select>
+            </div>
+          </>
+        )}
+
+        <div className="toolbar-spacer" />
+
+        {/* Zoom */}
         <div className="zoom-control">
           <IconZoom />
           <input
             type="range"
-            min={20}
+            min={2}
             max={400}
-            step={10}
+            step={1}
             value={pps}
             onChange={(e) => setZoom(Number(e.target.value))}
-            title="Timeline zoom"
+            title={`Zoom: ${pps} px/s`}
           />
         </div>
-        <div className="timeline-spacer" />
-        {selectedImageClip && (
-          <div className="selection-info">
-            <span className="mono">
-              {selectedImageClip.startTime.toFixed(1)}s → {(selectedImageClip.startTime + selectedImageClip.duration).toFixed(1)}s
-            </span>
-            <label>Fit:</label>
-            <select
-              value={selectedImageClip.fitMode}
-              onChange={(e) => {
-                updateImageClip(selectedImageClip.id, { fitMode: e.target.value as "cover" | "contain" });
-                scheduleSave();
-              }}
-            >
-              <option value="contain">Contain</option>
-              <option value="cover">Cover</option>
-            </select>
-          </div>
-        )}
-        {selectedAudioClip && (
-          <div className="selection-info">
-            <span className="mono">
-              {selectedAudioClip.startTime.toFixed(1)}s → {(selectedAudioClip.startTime + selectedAudioClip.duration).toFixed(1)}s
-            </span>
-          </div>
-        )}
+
+        <div className="toolbar-separator" />
+
+        {/* Snap toggle */}
+        <button
+          type="button"
+          className={`snap-toggle ${snapEnabled ? "on" : ""}`}
+          onClick={toggleSnap}
+          title="Toggle snapping"
+        >
+          Snap <span className="switch" />
+        </button>
       </div>
+
       <div className="timeline-body">
         <div className="timeline-labels">
           <div className="timeline-label-ruler" />
@@ -335,7 +370,6 @@ export function TimelineEditor() {
               <TimelineRuler totalSeconds={minSeconds} pixelsPerSecond={pps} width={trackWidth} />
             </div>
             <div
-              ref={imageTrackRef}
               className={`timeline-track image ${imgDragOver ? "drag-over" : ""}`}
               onMouseDown={onTrackBackgroundMouseDown}
               onDragOver={(e) => {
@@ -369,7 +403,6 @@ export function TimelineEditor() {
               })}
             </div>
             <div
-              ref={audioTrackRef}
               className={`timeline-track audio ${audDragOver ? "drag-over" : ""}`}
               onMouseDown={onTrackBackgroundMouseDown}
               onDragOver={(e) => {
@@ -401,16 +434,12 @@ export function TimelineEditor() {
                 );
               })}
             </div>
-            <div
-              className="playhead"
-              style={{ left: playheadTime * pps }}
-            >
+            <div className="playhead" style={{ left: playheadTime * pps }}>
               <div className="playhead-head" onMouseDown={onPlayheadMouseDown} />
             </div>
           </div>
         </div>
       </div>
-      <BottomToolbar />
     </div>
   );
 }
