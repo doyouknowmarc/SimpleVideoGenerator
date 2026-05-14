@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { useTimeline } from "@/state/timelineStore";
-import { validateForRender, totalDuration } from "@/lib/timelineCalc";
+import { validateClipsForRender, computeTotalDuration } from "@/lib/timelineHelpers";
 
 type Job = {
   id: string;
@@ -13,15 +13,19 @@ type Job = {
 
 export function ExportButton() {
   const projectId = useTimeline((s) => s.projectId);
-  const items = useTimeline((s) => s.items);
+  const imageClips = useTimeline((s) => s.imageClips);
+  const audioClips = useTimeline((s) => s.audioClips);
   const saveNow = useTimeline((s) => s.saveNow);
+
   const [job, setJob] = useState<Job | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  const [showPopover, setShowPopover] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const errs = validateForRender(items);
-  const total = totalDuration(items);
+  const errs = validateClipsForRender(imageClips, audioClips);
+  const total = computeTotalDuration(imageClips, audioClips);
+  const inProgress = job?.status === "queued" || job?.status === "running";
 
   useEffect(() => {
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
@@ -43,6 +47,7 @@ export function ExportButton() {
     setErr(null);
     setStarting(true);
     setJob(null);
+    setShowPopover(true);
     try {
       await saveNow();
       const res = await fetch("/api/render", {
@@ -62,33 +67,50 @@ export function ExportButton() {
     }
   }
 
+  const buttonLabel = starting
+    ? "Starting…"
+    : inProgress
+    ? `Rendering ${Math.round((job?.progress ?? 0) * 100)}%`
+    : "Export MP4";
+
   return (
-    <div className="export-card">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-        <div>
-          <div style={{ fontWeight: 600 }}>Export video</div>
-          <div style={{ color: "#8a93a3", fontSize: 12 }}>
-            {items.length} scene{items.length === 1 ? "" : "s"} · {total.toFixed(1)}s · 1920×1080 @ 30fps
+    <>
+      <button
+        className="btn"
+        onClick={() => {
+          if (errs.length === 0 && !inProgress) startRender();
+          else setShowPopover((v) => !v);
+        }}
+        disabled={starting || inProgress || errs.length > 0}
+        title={errs.length > 0 ? errs.join(" ") : "Render the timeline as MP4"}
+      >
+        {buttonLabel}
+      </button>
+      {showPopover && (job || err || errs.length > 0) && (
+        <div className="export-popover">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ fontWeight: 600, fontSize: 13 }}>Export</div>
+            <button className="btn ghost" onClick={() => setShowPopover(false)}>×</button>
           </div>
-        </div>
-        <button className="btn" disabled={starting || errs.length > 0 || (job?.status === "running" || job?.status === "queued")} onClick={startRender}>
-          {starting ? "Starting…" : job?.status === "running" || job?.status === "queued" ? "Rendering…" : "Export MP4"}
-        </button>
-      </div>
-      {errs.length > 0 && <div className="error">{errs.join(" ")}</div>}
-      {err && <div className="error">{err}</div>}
-      {job && (
-        <div style={{ marginTop: 10 }}>
-          <div style={{ fontSize: 12, color: "#8a93a3" }}>
-            Status: {job.status} · {Math.round(job.progress * 100)}%
+          <div style={{ color: "#8a93a3", fontSize: 12, marginTop: 4 }}>
+            {imageClips.length} image · {audioClips.length} audio · {total.toFixed(1)}s · 1920×1080
           </div>
-          <div className="progress"><div className="progress-fill" style={{ width: `${Math.round(job.progress * 100)}%` }} /></div>
-          {job.status === "completed" && job.videoUrl && (
-            <a className="btn" href={job.videoUrl} download>Download MP4</a>
+          {errs.length > 0 && <div className="error">{errs.join(" ")}</div>}
+          {err && <div className="error">{err}</div>}
+          {job && (
+            <>
+              <div style={{ fontSize: 12, color: "#8a93a3", marginTop: 8 }}>
+                Status: {job.status} · {Math.round(job.progress * 100)}%
+              </div>
+              <div className="progress"><div className="progress-fill" style={{ width: `${Math.round(job.progress * 100)}%` }} /></div>
+              {job.status === "completed" && job.videoUrl && (
+                <a className="btn small" href={job.videoUrl} download>Download MP4</a>
+              )}
+              {job.status === "failed" && <div className="error">{job.errorMessage}</div>}
+            </>
           )}
-          {job.status === "failed" && <div className="error">{job.errorMessage}</div>}
         </div>
       )}
-    </div>
+    </>
   );
 }

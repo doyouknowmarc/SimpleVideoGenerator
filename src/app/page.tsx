@@ -1,41 +1,51 @@
 "use client";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useTimeline } from "@/state/timelineStore";
-import { UploadPanel } from "@/components/UploadPanel";
 import { AssetLibrary } from "@/components/AssetLibrary";
-import { Timeline } from "@/components/Timeline";
+import { AddMediaButton } from "@/components/AddMediaButton";
+import { TimelineEditor } from "@/components/TimelineEditor";
 import { PreviewPlayer } from "@/components/PreviewPlayer";
 import { ExportButton } from "@/components/ExportButton";
+import { QuickAddWizard } from "@/components/QuickAddWizard";
+import { ProjectTitle } from "@/components/ProjectTitle";
+import { WorkspaceSplit } from "@/components/WorkspaceSplit";
 
 export default function Page() {
   const loaded = useTimeline((s) => s.loaded);
   const saving = useTimeline((s) => s.saving);
   const load = useTimeline((s) => s.load);
 
+  const [wizardOpen, setWizardOpen] = useState(false);
+
   useEffect(() => { void load(); }, [load]);
 
   if (!loaded) {
-    return <div style={{ padding: 24, color: "#8a93a3" }}>Loading…</div>;
+    return <div style={{ padding: 24, color: "#64748b" }}>Loading…</div>;
   }
 
   return (
-    <div className="app">
-      <aside className="sidebar">
-        <h1 className="h1">Simple Video Generator</h1>
-        <UploadPanel />
-        <AssetLibrary />
-      </aside>
-      <main className="main">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-          <h1 className="h1">Storyboard</h1>
-          <div style={{ color: "#5d6577", fontSize: 12 }}>{saving ? "Saving…" : "Saved"}</div>
+    <div className="app-shell">
+      <header className="app-header">
+        <ProjectTitle />
+        <div className="header-right">
+          <span className="save-status">{saving ? "Saving…" : "Saved"}</span>
+          <ExportButton />
         </div>
-        <PreviewPlayer />
-        <ExportButton />
-        <div style={{ marginTop: 18 }}>
-          <Timeline />
+      </header>
+      <div className="app-body">
+        <aside className="asset-panel">
+          <h2 className="asset-panel-title">Library</h2>
+          <AddMediaButton onClick={() => setWizardOpen(true)} />
+          <AssetLibrary />
+        </aside>
+        <div className="workspace">
+          <WorkspaceSplit
+            preview={<PreviewPlayer />}
+            timeline={<TimelineEditor />}
+          />
         </div>
-      </main>
+      </div>
+      <QuickAddWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />
     </div>
   );
 }

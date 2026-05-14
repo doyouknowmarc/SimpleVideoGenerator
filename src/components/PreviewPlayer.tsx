@@ -1,39 +1,34 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { useTimeline } from "@/state/timelineStore";
-import { withStartTimes, totalDuration } from "@/lib/timelineCalc";
-
-function fmt(t: number) {
-  if (!isFinite(t)) return "0:00.0";
-  const m = Math.floor(t / 60);
-  const s = (t - m * 60).toFixed(1).padStart(4, "0");
-  return `${m}:${s}`;
-}
+import { computeTotalDuration } from "@/lib/timelineHelpers";
+import { TransportControls } from "./TransportControls";
 
 export function PreviewPlayer() {
-  const items = useTimeline((s) => s.items);
+  const imageClips = useTimeline((s) => s.imageClips);
+  const audioClips = useTimeline((s) => s.audioClips);
   const assets = useTimeline((s) => s.assets);
-  const [time, setTime] = useState(0);
+  const playheadTime = useTimeline((s) => s.playheadTime);
+  const setPlayhead = useTimeline((s) => s.setPlayhead);
+
   const [playing, setPlaying] = useState(false);
   const rafRef = useRef<number | null>(null);
   const lastFrameRef = useRef<number>(0);
   const audioRefs = useRef<Record<string, HTMLAudioElement | null>>({});
-  const activeAudioRef = useRef<string | null>(null);
+  const activeClipsRef = useRef<Set<string>>(new Set());
 
-  const scenes = withStartTimes(items);
-  const total = totalDuration(items);
+  const total = computeTotalDuration(imageClips, audioClips);
 
-  function currentScene() {
-    if (scenes.length === 0) return null;
-    for (const s of scenes) {
-      if (time >= s.startTime && time < s.startTime + s.duration) return s;
-    }
-    return scenes[scenes.length - 1];
-  }
+  const activeImageClip = [...imageClips]
+    .reverse()
+    .find((c) => playheadTime >= c.startTime && playheadTime < c.startTime + c.duration);
+  const activeImage = activeImageClip
+    ? assets.find((a) => a.id === activeImageClip.assetId)
+    : null;
 
-  const scene = currentScene();
-  const image = scene ? assets.find((a) => a.id === scene.imageAssetId) : null;
-  const audioAssetId = scene?.audioAssetId ?? null;
+  const activeAudioClips = audioClips.filter(
+    (c) => playheadTime >= c.startTime && playheadTime < c.startTime + c.duration,
+  );
 
   useEffect(() => {
     if (!playing) {
@@ -45,85 +40,108 @@ export function PreviewPlayer() {
     const tick = (now: number) => {
       const dt = (now - lastFrameRef.current) / 1000;
       lastFrameRef.current = now;
-      setTime((t) => {
-        const next = t + dt;
-        if (next >= total) {
-          setPlaying(false);
-          return total;
-        }
-        return next;
-      });
+      const cur = useTimeline.getState().playheadTime;
+      const next = cur + dt;
+      if (next >= total) {
+        setPlayhead(total);
+        setPlaying(false);
+        return;
+      }
+      setPlayhead(next);
       rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);
-    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
-  }, [playing, total]);
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+  }, [playing, total, setPlayhead]);
 
   useEffect(() => {
-    const prev = activeAudioRef.current;
-    if (prev && prev !== audioAssetId) {
-      const el = audioRefs.current[prev];
-      if (el) { el.pause(); el.currentTime = 0; }
-    }
-    if (playing && audioAssetId && scene) {
-      const el = audioRefs.current[audioAssetId];
-      if (el) {
-        const offset = Math.max(0, time - scene.startTime);
-        if (Math.abs(el.currentTime - offset) > 0.25) el.currentTime = offset;
-        el.play().catch(() => {});
+    const activeIds = new Set(activeAudioClips.map((c) => c.id));
+    for (const id of activeClipsRef.current) {
+      if (!activeIds.has(id)) {
+        const el = audioRefs.current[id];
+        if (el) {
+          el.pause();
+          el.currentTime = 0;
+        }
       }
-    } else if (!playing && audioAssetId) {
-      const el = audioRefs.current[audioAssetId];
-      if (el) el.pause();
     }
-    activeAudioRef.current = audioAssetId;
-  }, [audioAssetId, playing, scene?.startTime, time, scene]);
+    for (const clip of activeAudioClips) {
+      const el = audioRefs.current[clip.id];
+      if (!el) continue;
+      const offset = Math.max(0, playheadTime - clip.startTime);
+      if (Math.abs(el.currentTime - offset) > 0.2) {
+        try { el.currentTime = offset; } catch { /* ignore */ }
+      }
+      if (playing) {
+        el.play().catch(() => {});
+      } else {
+        el.pause();
+      }
+    }
+    activeClipsRef.current = activeIds;
+  }, [activeAudioClips, playing, playheadTime]);
+
+  // Expose play toggle to outside via global keyboard handler in TimelineEditor
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.code !== "Space") return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "SELECT" || target.tagName === "TEXTAREA")) return;
+      if (target?.closest(".modal")) return;
+      e.preventDefault();
+      togglePlay();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [total]);
 
   function togglePlay() {
     if (total <= 0) return;
-    if (time >= total) setTime(0);
+    if (playheadTime >= total) setPlayhead(0);
     setPlaying((p) => !p);
   }
 
-  function seek(pct: number) {
-    const t = Math.max(0, Math.min(total, total * pct));
-    setTime(t);
-  }
-
-  const audioAssets = assets.filter((a) => a.type === "audio");
-
   return (
-    <div>
-      <div className="preview">
-        {image ? (
-          <img src={image.url} className={scene?.fitMode === "cover" ? "cover" : "contain"} alt="" />
+    <>
+      <div className="preview-stage">
+        {activeImage ? (
+          <img
+            src={activeImage.url}
+            className={activeImageClip?.fitMode === "cover" ? "cover" : "contain"}
+            alt=""
+          />
         ) : (
-          <div className="preview-empty">No scenes yet — add an image from the sidebar.</div>
+          <div className="preview-empty">
+            {imageClips.length === 0
+              ? "Add media and drag it to the timeline to preview"
+              : "(no image at this time)"}
+          </div>
         )}
       </div>
-      <div className="preview-controls">
-        <button className="btn" onClick={togglePlay} disabled={total <= 0}>
-          {playing ? "Pause" : time >= total && total > 0 ? "Replay" : "Play"}
-        </button>
-        <div
-          className="timebar"
-          onClick={(e) => {
-            const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
-            seek((e.clientX - rect.left) / rect.width);
-          }}
-        >
-          <div className="timebar-fill" style={{ width: `${total > 0 ? (time / total) * 100 : 0}%` }} />
-        </div>
-        <div className="time-label">{fmt(time)} / {fmt(total)}</div>
-      </div>
-      {audioAssets.map((a) => (
-        <audio
-          key={a.id}
-          ref={(el) => { audioRefs.current[a.id] = el; }}
-          src={a.url}
-          preload="auto"
-        />
-      ))}
-    </div>
+      <TransportControls
+        playing={playing}
+        currentTime={playheadTime}
+        totalDuration={total}
+        onPlayToggle={togglePlay}
+        onStepBack={() => { setPlaying(false); setPlayhead(0); }}
+        onStepForward={() => { setPlaying(false); setPlayhead(total); }}
+        disabled={total <= 0}
+      />
+      {audioClips.map((c) => {
+        const asset = assets.find((a) => a.id === c.assetId);
+        if (!asset) return null;
+        return (
+          <audio
+            key={c.id}
+            ref={(el) => { audioRefs.current[c.id] = el; }}
+            src={asset.url}
+            preload="auto"
+          />
+        );
+      })}
+    </>
   );
 }

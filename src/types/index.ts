@@ -14,14 +14,22 @@ export type MediaAsset = {
 
 export type FitMode = "cover" | "contain";
 
-export type TimelineItem = {
+export type ImageClip = {
   id: string;
-  positionIndex: number;
-  imageAssetId: string;
-  audioAssetId?: string | null;
+  assetId: string;
+  startTime: number;
   duration: number;
   fitMode: FitMode;
 };
+
+export type AudioClip = {
+  id: string;
+  assetId: string;
+  startTime: number;
+  duration: number;
+};
+
+export type TrackType = "image" | "audio";
 
 export type RenderJobStatus = "queued" | "running" | "completed" | "failed";
 
@@ -38,5 +46,6 @@ export type ProjectPayload = {
   id: string;
   title: string;
   assets: MediaAsset[];
-  items: TimelineItem[];
+  imageClips: ImageClip[];
+  audioClips: AudioClip[];
 };

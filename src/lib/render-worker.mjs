@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { PrismaClient } from "@prisma/client";
 import { spawn } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile, rename } from "node:fs/promises";
 import path from "node:path";
 
 const prisma = new PrismaClient();
@@ -27,16 +27,20 @@ function runFfmpeg(args) {
   });
 }
 
-async function renderScene({ imagePath, audioPath, duration, fitMode, outPath }) {
+async function renderImageSegment({ imagePath, duration, fitMode, outPath }) {
   const vf =
     fitMode === "cover"
       ? `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,crop=${WIDTH}:${HEIGHT},setsar=1`
       : `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=decrease,pad=${WIDTH}:${HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1`;
   const d = duration.toFixed(3);
-  const args = ["-y", "-loop", "1", "-t", d, "-i", imagePath];
-  if (audioPath) args.push("-i", audioPath);
-  else args.push("-f", "lavfi", "-t", d, "-i", "anullsrc=channel_layout=stereo:sample_rate=44100");
-  args.push(
+  await runFfmpeg([
+    "-y",
+    "-loop", "1",
+    "-t", d,
+    "-i", imagePath,
+    "-f", "lavfi",
+    "-t", d,
+    "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
     "-vf", vf,
     "-r", String(FPS),
     "-c:v", "libx264",
@@ -48,12 +52,80 @@ async function renderScene({ imagePath, audioPath, duration, fitMode, outPath })
     "-shortest",
     "-t", d,
     outPath,
+  ]);
+}
+
+async function renderBlackSegment({ duration, outPath }) {
+  const d = duration.toFixed(3);
+  await runFfmpeg([
+    "-y",
+    "-f", "lavfi",
+    "-i", `color=c=black:s=${WIDTH}x${HEIGHT}:r=${FPS}`,
+    "-f", "lavfi",
+    "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+    "-t", d,
+    "-c:v", "libx264",
+    "-pix_fmt", "yuv420p",
+    "-c:a", "aac",
+    "-b:a", "192k",
+    "-ar", "44100",
+    "-ac", "2",
+    "-shortest",
+    "-t", d,
+    outPath,
+  ]);
+}
+
+async function concatSegments(listPath, outPath) {
+  await runFfmpeg(["-y", "-f", "concat", "-safe", "0", "-i", listPath, "-c", "copy", outPath]);
+}
+
+async function mixAudio({ audioClips, assetMap, totalDuration, outPath }) {
+  const args = ["-y"];
+  for (const clip of audioClips) {
+    args.push("-i", assetMap.get(clip.assetId).storagePath);
+  }
+  const delayFilters = audioClips.map((clip, i) => {
+    const ms = Math.max(0, Math.round(clip.startTime * 1000));
+    // atrim limits the source to the clip's duration; adelay shifts it.
+    return `[${i}:a]atrim=0:${clip.duration.toFixed(3)},asetpts=PTS-STARTPTS,adelay=${ms}|${ms}[a${i}]`;
+  });
+  const mixInputs = audioClips.map((_, i) => `[a${i}]`).join("");
+  const filterComplex = [
+    ...delayFilters,
+    `${mixInputs}amix=inputs=${audioClips.length}:duration=longest:normalize=0[aout]`,
+  ].join(";");
+
+  args.push(
+    "-filter_complex", filterComplex,
+    "-map", "[aout]",
+    "-c:a", "aac",
+    "-b:a", "192k",
+    "-ar", "44100",
+    "-ac", "2",
+    "-t", totalDuration.toFixed(3),
+    outPath,
   );
   await runFfmpeg(args);
 }
 
-async function concatScenes(listPath, outPath) {
-  await runFfmpeg(["-y", "-f", "concat", "-safe", "0", "-i", listPath, "-c", "copy", outPath]);
+async function combineVideoAndAudio({ videoPath, audioPath, totalDuration, outPath }) {
+  await runFfmpeg([
+    "-y",
+    "-i", videoPath,
+    "-i", audioPath,
+    "-map", "0:v",
+    "-map", "1:a",
+    "-c:v", "copy",
+    "-c:a", "aac",
+    "-b:a", "192k",
+    "-t", totalDuration.toFixed(3),
+    outPath,
+  ]);
+}
+
+async function setProgress(jobId, p) {
+  await prisma.renderJob.update({ where: { id: jobId }, data: { progress: p } });
 }
 
 async function main() {
@@ -61,45 +133,111 @@ async function main() {
   if (!jobId) { console.error("jobId required"); process.exit(2); }
 
   try {
-    await prisma.renderJob.update({ where: { id: jobId }, data: { status: "running", progress: 0 } });
+    await prisma.renderJob.update({
+      where: { id: jobId },
+      data: { status: "running", progress: 0 },
+    });
     const job = await prisma.renderJob.findUnique({ where: { id: jobId } });
-    const items = await prisma.timelineItem.findMany({
+    const clips = await prisma.timelineClip.findMany({
       where: { projectId: job.projectId },
-      orderBy: { positionIndex: "asc" },
+      orderBy: { startTime: "asc" },
     });
     const assets = await prisma.mediaAsset.findMany({ where: { projectId: job.projectId } });
     const assetMap = new Map(assets.map((a) => [a.id, a]));
 
+    const imageClips = clips
+      .filter((c) => c.trackType === "image")
+      .sort((a, b) => a.startTime - b.startTime);
+    const audioClips = clips.filter((c) => c.trackType === "audio");
+
+    const allEnds = [...imageClips, ...audioClips].map((c) => c.startTime + c.duration);
+    const totalDuration = allEnds.length > 0 ? Math.max(...allEnds) : 0;
+    if (totalDuration <= 0) throw new Error("Empty timeline");
+
     const jobDir = path.join(RENDERS_DIR, jobId);
     await mkdir(jobDir, { recursive: true });
 
-    const sceneFiles = [];
-    for (let i = 0; i < items.length; i++) {
-      const it = items[i];
-      const img = assetMap.get(it.imageAssetId);
-      const aud = it.audioAssetId ? assetMap.get(it.audioAssetId) : null;
-      const out = path.join(jobDir, `scene-${String(i).padStart(3, "0")}.mp4`);
-      await renderScene({
-        imagePath: img.storagePath,
-        audioPath: aud ? aud.storagePath : null,
-        duration: it.duration,
-        fitMode: it.fitMode,
-        outPath: out,
+    // ---------- Stage 1: build video track (image clips + black gaps) ----------
+    const segments = []; // [{ type, duration, ... }]
+    let cursor = 0;
+    for (const clip of imageClips) {
+      if (clip.startTime > cursor + 0.001) {
+        segments.push({ type: "black", duration: clip.startTime - cursor });
+      } else if (clip.startTime < cursor - 0.001) {
+        // Overlapping image clip — we can't render two images at once,
+        // so just skip the overlap (later image wins for the overlapping region).
+        // Adjust duration of this clip to start at cursor.
+        const newDur = clip.startTime + clip.duration - cursor;
+        if (newDur > 0.001) {
+          segments.push({
+            type: "image",
+            duration: newDur,
+            imagePath: assetMap.get(clip.assetId).storagePath,
+            fitMode: clip.fitMode ?? "contain",
+          });
+          cursor = cursor + newDur;
+        }
+        continue;
+      }
+      segments.push({
+        type: "image",
+        duration: clip.duration,
+        imagePath: assetMap.get(clip.assetId).storagePath,
+        fitMode: clip.fitMode ?? "contain",
       });
-      sceneFiles.push(out);
-      await prisma.renderJob.update({
-        where: { id: jobId },
-        data: { progress: ((i + 1) / items.length) * 0.9 },
-      });
+      cursor = clip.startTime + clip.duration;
+    }
+    if (cursor < totalDuration - 0.001) {
+      segments.push({ type: "black", duration: totalDuration - cursor });
     }
 
-    const listPath = path.join(jobDir, "concat.txt");
+    const segmentFiles = [];
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      const out = path.join(jobDir, `segment-${String(i).padStart(3, "0")}.mp4`);
+      if (seg.type === "image") {
+        await renderImageSegment({
+          imagePath: seg.imagePath,
+          duration: seg.duration,
+          fitMode: seg.fitMode,
+          outPath: out,
+        });
+      } else {
+        await renderBlackSegment({ duration: seg.duration, outPath: out });
+      }
+      segmentFiles.push(out);
+      await setProgress(jobId, ((i + 1) / segments.length) * 0.6);
+    }
+
+    const concatList = path.join(jobDir, "concat.txt");
     await writeFile(
-      listPath,
-      sceneFiles.map((f) => `file '${f.replace(/'/g, "'\\''")}'`).join("\n") + "\n",
+      concatList,
+      segmentFiles.map((f) => `file '${f.replace(/'/g, "'\\''")}'`).join("\n") + "\n",
     );
+    const videoOnly = path.join(jobDir, "video_only.mp4");
+    await concatSegments(concatList, videoOnly);
+    await setProgress(jobId, 0.65);
+
+    // ---------- Stage 2: audio mix ----------
     const finalPath = path.join(jobDir, "final.mp4");
-    await concatScenes(listPath, finalPath);
+    if (audioClips.length === 0) {
+      // No audio clips — the silent track in video_only is fine. Just rename.
+      await rename(videoOnly, finalPath);
+      await setProgress(jobId, 0.95);
+    } else {
+      const audioMix = path.join(jobDir, "audio_mix.aac");
+      await mixAudio({ audioClips, assetMap, totalDuration, outPath: audioMix });
+      await setProgress(jobId, 0.85);
+
+      // ---------- Stage 3: combine ----------
+      await combineVideoAndAudio({
+        videoPath: videoOnly,
+        audioPath: audioMix,
+        totalDuration,
+        outPath: finalPath,
+      });
+      await setProgress(jobId, 0.95);
+    }
 
     await prisma.renderJob.update({
       where: { id: jobId },

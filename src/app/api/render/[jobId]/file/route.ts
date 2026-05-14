@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { createReadStream, statSync } from "node:fs";
+import { Readable } from "node:stream";
 import { prisma } from "@/lib/db";
 
 export const runtime = "nodejs";
@@ -11,8 +12,11 @@ export async function GET(_req: NextRequest, { params }: { params: { jobId: stri
   let size: number;
   try { size = statSync(job.outputPath).size; }
   catch { return new Response("file missing", { status: 410 }); }
-  const stream = createReadStream(job.outputPath);
-  return new Response(stream as unknown as ReadableStream, {
+
+  const nodeStream = createReadStream(job.outputPath);
+  const webStream = Readable.toWeb(nodeStream) as unknown as ReadableStream;
+
+  return new Response(webStream, {
     headers: {
       "Content-Type": "video/mp4",
       "Content-Length": String(size),

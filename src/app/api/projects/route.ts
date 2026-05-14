@@ -1,15 +1,42 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getOrCreateDefaultProject, assetUrl } from "@/lib/project";
+import type { FitMode } from "@/types";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   const project = await getOrCreateDefaultProject();
-  const [assets, items] = await Promise.all([
-    prisma.mediaAsset.findMany({ where: { projectId: project.id }, orderBy: { createdAt: "asc" } }),
-    prisma.timelineItem.findMany({ where: { projectId: project.id }, orderBy: { positionIndex: "asc" } }),
+  const [assets, clips] = await Promise.all([
+    prisma.mediaAsset.findMany({
+      where: { projectId: project.id },
+      orderBy: { createdAt: "asc" },
+    }),
+    prisma.timelineClip.findMany({
+      where: { projectId: project.id },
+      orderBy: { startTime: "asc" },
+    }),
   ]);
+
+  const imageClips = clips
+    .filter((c) => c.trackType === "image")
+    .map((c) => ({
+      id: c.id,
+      assetId: c.assetId,
+      startTime: c.startTime,
+      duration: c.duration,
+      fitMode: (c.fitMode ?? "contain") as FitMode,
+    }));
+
+  const audioClips = clips
+    .filter((c) => c.trackType === "audio")
+    .map((c) => ({
+      id: c.id,
+      assetId: c.assetId,
+      startTime: c.startTime,
+      duration: c.duration,
+    }));
+
   return NextResponse.json({
     id: project.id,
     title: project.title,
@@ -24,13 +51,7 @@ export async function GET() {
       width: a.width ?? undefined,
       height: a.height ?? undefined,
     })),
-    items: items.map((i) => ({
-      id: i.id,
-      positionIndex: i.positionIndex,
-      imageAssetId: i.imageAssetId,
-      audioAssetId: i.audioAssetId,
-      duration: i.duration,
-      fitMode: i.fitMode,
-    })),
+    imageClips,
+    audioClips,
   });
 }

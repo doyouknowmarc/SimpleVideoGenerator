@@ -10,3 +10,8 @@ prisma/dev.db
 prisma/dev.db-journal
 *.log
 .DS_Store
+
+# Local sample / test data — not source code
+SCC-Project_Presentation/
+SampleData/
+tsconfig.tsbuildinfo

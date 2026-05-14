@@ -13,7 +13,7 @@ model Project {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   assets    MediaAsset[]
-  items     TimelineItem[]
+  clips     TimelineClip[]
   jobs      RenderJob[]
 }
 
@@ -33,17 +33,17 @@ model MediaAsset {
   @@index([projectId])
 }
 
-model TimelineItem {
-  id            String  @id @default(cuid())
-  projectId     String
-  positionIndex Int
-  imageAssetId  String
-  audioAssetId  String?
-  duration      Float
-  fitMode       String  @default("contain")
-  project       Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+model TimelineClip {
+  id        String  @id @default(cuid())
+  projectId String
+  trackType String
+  assetId   String
+  startTime Float
+  duration  Float
+  fitMode   String?
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
-  @@index([projectId, positionIndex])
+  @@index([projectId])
 }
 
 model RenderJob {
